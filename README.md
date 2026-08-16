@@ -1,64 +1,104 @@
 # Krisiko
 
-Browser prototype: **Risk/Risiko + relics + cards + global events**, 1 player vs AI.
+Prototipo browser: **Risiko + reliquie + carte + eventi globali**. Demo: 1 giocatore vs IA.
 
-![Krisiko gameplay screenshot](docs/assets/screen.jpeg)
+> **Metodo di lavoro:** [docs/repo-org.md](docs/repo-org.md).  
+> Questo README è l’**istanza** (`aedral/krisiko`, chart `krisiko`). Per replicare layout, Docker, Helm, CI o Pages su un altro progetto, segui il playbook, non copiare i nomi da qui.
 
-## Run
+![Screenshot di gioco](docs/assets/screen.jpeg)
 
-### Docker Compose
+## Valori
+
+| Chiave | Valore |
+|--------|--------|
+| owner / repo / app | `aedral` / `krisiko` / `krisiko` |
+| Immagine | `ghcr.io/aedral/krisiko` |
+| Chart | `oci://ghcr.io/aedral/krisiko/krisiko` |
+| Pages | https://aedral.github.io/krisiko/ |
+| Compose | http://localhost:3080 |
+| Serve | http://localhost:3000 |
+
+## Avvio
 
 ```bash
 docker compose up --build
 ```
 
-Open **http://localhost:3080**.
-
-### Local (no Docker)
+Senza Docker:
 
 ```bash
 npm start
 ```
 
-Open the URL shown (e.g. `http://localhost:3000`).
-
-### Release (tag `v*`)
-
-Pushing a `v*` tag runs the `Release` workflow, which:
-1. publishes a Docker image to GHCR (`:tag`, `:version`, `:latest`)
-2. publishes the Helm chart as OCI to GHCR
-3. deploys `src/` to **GitHub Pages** (always the latest release)
+## Test
 
 ```bash
-helm install krisiko oci://ghcr.io/aedral/krisiko/krisiko --version <VERSION>
+npm run smoke
 ```
 
-Pages demo: `https://aedral.github.io/krisiko/`
+Partite headless IA vs IA (`src/js/smoke-test.js`). Non entra nell’immagine (`.dockerignore`).
 
-If the Pages job fails with “Get Pages site failed”, enable it once under
-**Settings → Pages → Source: GitHub Actions**, then re-run the workflow
-(or push another `v*` tag).
+## Release
 
-## Controls
+I commit su `main` non pubblicano. Si pubblica con un tag SemVer:
 
-1. **Reinforce** — click your territories, then “End reinforce”
-2. **Attack** — select attacker (≥2 armies), then an adjacent enemy; optional combat card from the hand tray
-3. **Fortify** — from → to (one move)
-4. **Action** cards — click a card in the tray, then the required target
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
 
-Layout: Risk region map in the center, **opponent panel** on the right, **relic + hand + stats** along the bottom.
+Il workflow `.github/workflows/release.yml` (tag `v*`) nell’ordine:
 
-## Structure
+1. immagine Docker su GHCR (`:v0.1.0`, `:0.1.0`, `:latest`)
+2. chart Helm OCI su GHCR
+3. contenuto di `src/` su GitHub Pages (ultima release)
 
-- `src/js/engine/` — pure rules / serializable state
-- `src/js/ai/` — heuristic AI
-- `src/js/ui/` — map and HUD
-- `src/js/data/` — Risk map, relics, cards, events
-- `helm/krisiko/` — Helm chart
-- `docs/GDD.md` — design / rules doc
+```bash
+helm install krisiko oci://ghcr.io/aedral/krisiko/krisiko --version 0.1.0
+```
 
-## Goal
+## Pages
 
-Conquer all 42 territories. Global events start from the end of round 2.
+Demo = ultima release, non `main`.
 
-Map based on the Risk board (Wikimedia / CC BY-SA).
+Se il job fallisce con *Get Pages site failed*: **Settings → Pages → Source: GitHub Actions**, poi re-run del workflow (o un nuovo tag). Comandi `gh` e checklist: playbook, [sezione 8](docs/repo-org.md#8-github-pages--setup-una-tantum).
+
+## Albero
+
+```
+src/                 runtime (HTML/CSS/JS, path relativi)
+  js/engine/         regole, stato serializzabile
+  js/ai/             IA euristica
+  js/ui/             mappa, HUD, dadi
+  js/data/           territori, carte, reliquie, eventi, missioni
+helm/krisiko/        chart Kubernetes
+.github/workflows/   release su tag v*
+docs/                playbook, GDD, catalogo, asset
+Dockerfile           nginx serve src/
+docker-compose.yml   host 3080 → container 80
+```
+
+`src/` è l’unico artefatto runtime: Compose, immagine e Pages servono quella cartella.
+
+## Prodotto
+
+Si vince completando l’**obiettivo segreto** (missione), oppure eliminando l’avversario. Eventi globali dalla fine del round 2.
+
+Controlli:
+
+1. **Rinforzi** — click sui propri territori, poi «Fine rinforzi»
+2. **Attacco** — attaccante (≥2 armate) poi nemico adiacente; carta combat opzionale dalla mano
+3. **Spostamento** — da → a (un movimento)
+4. **Carte azione** — click sulla carta, poi il bersaglio richiesto
+
+Layout: mappa al centro, pannello avversario a destra, reliquia + mano + stats in basso.
+
+Mappa basata sul tabellone Risk (Wikimedia / CC BY-SA).
+
+## Documenti
+
+| File | Contenuto |
+|------|-----------|
+| [docs/repo-org.md](docs/repo-org.md) | Metodo: albero, Docker, Helm, CI, ignore, Pages |
+| [docs/GDD.md](docs/GDD.md) | Regolamento e delta Krisiko |
+| [docs/CARTE-RELIQUIE-EVENTI.md](docs/CARTE-RELIQUIE-EVENTI.md) | Catalogo carte, reliquie, eventi |
