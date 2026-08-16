@@ -1,8 +1,10 @@
 # Krisiko
 
-Demo prototipo browser: **Risiko + reliquie + carte + eventi globali**, 1 giocatore vs IA.
+Browser prototype: **Risk/Risiko + relics + cards + global events**, 1 player vs AI.
 
-## Avvio
+![Krisiko gameplay screenshot](docs/assets/screen.jpeg)
+
+## Run
 
 ### Docker Compose
 
@@ -10,44 +12,50 @@ Demo prototipo browser: **Risiko + reliquie + carte + eventi globali**, 1 giocat
 docker compose up --build
 ```
 
-Apri **http://localhost:3080**.
+Open **http://localhost:3080**.
 
-### Locale (senza Docker)
+### Local (no Docker)
 
 ```bash
 npm start
 ```
 
-Apri l’URL mostrato (es. `http://localhost:3000`).
+Open the URL shown (e.g. `http://localhost:3000`).
 
-### Helm
+### Release (tag `v*`)
+
+Pushing a `v*` tag runs the `Release` workflow, which:
+1. publishes a Docker image to GHCR (`:tag`, `:version`, `:latest`)
+2. publishes the Helm chart as OCI to GHCR
+3. deploys `src/` to **GitHub Pages** (always the latest release)
 
 ```bash
 helm install krisiko oci://ghcr.io/aedral/krisiko/krisiko --version <VERSION>
 ```
 
-La release GitHub Actions parte su push di un tag `v*` (immagine + chart su GHCR).
+Pages demo: `https://aedral.github.io/krisiko/`  
+(Settings → Pages → Source: **GitHub Actions**)
 
-## Controlli
+## Controls
 
-1. **Rinforzi** — clic sui tuoi territori, poi «Fine rinforzi»
-2. **Attacco** — seleziona attaccante (≥2), poi bersaglio nemico adiacente; carta combat opzionale dalla mano in basso
-3. **Spostamento** — da → a (un movimento)
-4. Carte **azione** — clic sulla carta in basso, poi target richiesto
+1. **Reinforce** — click your territories, then “End reinforce”
+2. **Attack** — select attacker (≥2 armies), then an adjacent enemy; optional combat card from the hand tray
+3. **Fortify** — from → to (one move)
+4. **Action** cards — click a card in the tray, then the required target
 
-Layout: mappa Risk a regioni al centro, **pannello avversario** a destra, **reliquia + mano + stats** in basso.
+Layout: Risk region map in the center, **opponent panel** on the right, **relic + hand + stats** along the bottom.
 
-## Struttura
+## Structure
 
-- `src/js/engine/` — regole pure / stato serializzabile
-- `src/js/ai/` — IA euristica
-- `src/js/ui/` — mappa e HUD
-- `src/js/data/` — mappa Risk, reliquie, carte, eventi
+- `src/js/engine/` — pure rules / serializable state
+- `src/js/ai/` — heuristic AI
+- `src/js/ui/` — map and HUD
+- `src/js/data/` — Risk map, relics, cards, events
 - `helm/krisiko/` — Helm chart
-- `docs/GDD.md` — regolamento
+- `docs/GDD.md` — design / rules doc
 
-## Obiettivo
+## Goal
 
-Conquista tutti i 42 territori. Eventi globali dalla fine del round 2.
+Conquer all 42 territories. Global events start from the end of round 2.
 
-Mappa basata sul tavoliere Risk (Wikimedia / CC BY-SA).
+Map based on the Risk board (Wikimedia / CC BY-SA).

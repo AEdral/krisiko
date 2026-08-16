@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
   packages: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -94,10 +100,35 @@ jobs:
             echo "**Container image**"
             echo '```'
             echo "${IMAGE}:${TAG}"
+            echo "${IMAGE}:latest"
             echo '```'
             echo ""
             echo "**Helm chart**"
             echo '```bash'
             echo "helm install krisiko oci://${IMAGE}/${{ env.CHART_NAME }} --version ${VERSION}"
             echo '```'
+            echo ""
+            echo "**GitHub Pages** — latest del tag (${TAG}) pubblicato su Pages"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  pages:
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: src
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
