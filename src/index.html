@@ -16,6 +16,10 @@
         <h1>Krisiko</h1>
       </div>
       <div class="top-meta" id="top-meta"></div>
+      <button type="button" id="btn-rail" class="btn-rail" aria-expanded="false" aria-controls="side-rail" title="Info partita">
+        <span class="btn-rail-bars" aria-hidden="true"></span>
+        <span class="sr-only">Apri pannello</span>
+      </button>
       <button type="button" id="btn-new" class="btn btn-ghost">Nuova partita</button>
     </header>
 
@@ -26,27 +30,16 @@
       </section>
 
       <div class="hud-stack">
-        <aside class="side-rail">
+        <aside class="side-rail" id="side-rail">
+          <div class="rail-drawer">
+            <div class="player-card opponent" id="opponent-panel"></div>
+            <div class="hud-block event-card" id="event-block"></div>
+            <div class="hud-block log-card">
+              <h2>Log</h2>
+              <div id="log" class="log"></div>
+            </div>
+          </div>
           <div class="hud-actions" id="actions"></div>
-          <div class="hud-fold">
-            <button type="button" class="hud-fold-toggle" aria-expanded="false">Avversario</button>
-            <div class="hud-fold-body">
-              <div class="player-card opponent" id="opponent-panel"></div>
-            </div>
-          </div>
-          <div class="hud-fold">
-            <button type="button" class="hud-fold-toggle" aria-expanded="false">Evento</button>
-            <div class="hud-block event-card hud-fold-body" id="event-block"></div>
-          </div>
-          <div class="hud-fold">
-            <button type="button" class="hud-fold-toggle" aria-expanded="false">Log</button>
-            <div class="hud-fold-body">
-              <div class="hud-block log-card">
-                <h2>Log</h2>
-                <div id="log" class="log"></div>
-              </div>
-            </div>
-          </div>
         </aside>
 
         <section class="player-tray" id="player-tray">
@@ -68,6 +61,7 @@
           </div>
         </section>
       </div>
+      <div class="rail-backdrop" id="rail-backdrop"></div>
     </main>
 
     <div id="dice-overlay" class="dice-overlay hidden">

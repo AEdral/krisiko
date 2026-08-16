@@ -475,6 +475,23 @@ function maybeRunAi() {
 document.getElementById('btn-new').addEventListener('click', newGame);
 document.getElementById('btn-overlay-new').addEventListener('click', newGame);
 
+const appEl = document.getElementById('app');
+const btnRail = document.getElementById('btn-rail');
+const railBackdrop = document.getElementById('rail-backdrop');
+
+function setRailOpen(open) {
+  appEl.classList.toggle('rail-open', open);
+  btnRail?.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+btnRail?.addEventListener('click', () => {
+  setRailOpen(!appEl.classList.contains('rail-open'));
+});
+railBackdrop?.addEventListener('click', () => setRailOpen(false));
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') setRailOpen(false);
+});
+
 els.playerMission.addEventListener('click', () => {
   ui.missionExpanded = !ui.missionExpanded;
   refresh();
