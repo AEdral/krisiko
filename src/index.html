@@ -34,7 +34,7 @@
       <div class="hud-stack">
         <aside class="side-rail" id="side-rail">
           <div class="rail-drawer">
-            <div class="player-card opponent" id="opponent-panel"></div>
+            <div class="opponents-panel" id="opponent-panel"></div>
             <div class="hud-block event-card" id="event-block"></div>
             <div class="hud-block log-card">
               <h2>Log</h2>
@@ -96,6 +96,27 @@
         <div class="fortify-actions">
           <button type="button" id="fortify-cancel" class="btn btn-ghost">Annulla</button>
           <button type="button" id="fortify-confirm" class="btn">Conferma</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="lobby" class="overlay">
+      <div class="modal lobby-modal">
+        <h2>Nuova partita</h2>
+        <p class="lobby-lead">Quanti avversari IA? Massimo 6 giocatori in totale.</p>
+        <div class="lobby-stepper">
+          <button type="button" id="lobby-ai-minus" class="btn btn-ghost lobby-step" aria-label="Meno IA">−</button>
+          <div class="lobby-ai-value">
+            <span id="lobby-ai-count">1</span>
+            <span class="lobby-ai-label" id="lobby-ai-label">IA</span>
+          </div>
+          <button type="button" id="lobby-ai-plus" class="btn btn-ghost lobby-step" aria-label="Più IA">+</button>
+        </div>
+        <div class="lobby-slots" id="lobby-slots"></div>
+        <p class="lobby-total" id="lobby-total"></p>
+        <div class="lobby-actions">
+          <button type="button" id="lobby-cancel" class="btn btn-ghost hidden">Annulla</button>
+          <button type="button" id="lobby-start" class="btn">Inizia</button>
         </div>
       </div>
     </div>

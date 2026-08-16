@@ -1,4 +1,4 @@
-import { createGame, applyAction, CARDS, TERRITORIES, areAdjacent, canFortifyBetween } from './engine/game.js';
+import { createGame, applyAction, CARDS, TERRITORIES, areAdjacent, canFortifyBetween, PLAYER_SLOTS, MAX_PLAYERS } from './engine/game.js';
 import { runAiTurn } from './ai/ai.js';
 import { renderMap, computeHighlights } from './ui/map.js';
 import { renderHud, renderActions } from './ui/hud.js';
@@ -20,6 +20,15 @@ const els = {
   overlay: document.getElementById('overlay'),
   overlayTitle: document.getElementById('overlay-title'),
   overlayBody: document.getElementById('overlay-body'),
+  lobby: document.getElementById('lobby'),
+  lobbyAiCount: document.getElementById('lobby-ai-count'),
+  lobbyAiLabel: document.getElementById('lobby-ai-label'),
+  lobbySlots: document.getElementById('lobby-slots'),
+  lobbyTotal: document.getElementById('lobby-total'),
+  lobbyCancel: document.getElementById('lobby-cancel'),
+  lobbyStart: document.getElementById('lobby-start'),
+  lobbyMinus: document.getElementById('lobby-ai-minus'),
+  lobbyPlus: document.getElementById('lobby-ai-plus'),
   diceOverlay: document.getElementById('dice-overlay'),
   diceTitle: document.getElementById('dice-title'),
   diceAtt: document.getElementById('dice-att'),
@@ -48,23 +57,72 @@ const ui = {
   marchFrom: null,
   highlightIds: null,
   missionExpanded: false,
-  opponentExpanded: false,
+  expandedOpponentId: null,
   onCardClick: null,
   onEndPhase: null,
   onClearCombatCard: null,
 };
 
+const AI_COUNT_KEY = 'krisiko.aiCount';
+const MAX_AI = MAX_PLAYERS - 1;
+let aiCount = loadAiCount();
+
+function loadAiCount() {
+  try {
+    const n = Number(localStorage.getItem(AI_COUNT_KEY));
+    if (!Number.isFinite(n)) return 1;
+    return Math.min(MAX_AI, Math.max(1, Math.floor(n)));
+  } catch {
+    return 1;
+  }
+}
+
+function persistAiCount() {
+  try {
+    localStorage.setItem(AI_COUNT_KEY, String(aiCount));
+  } catch {
+    /* ignore */
+  }
+}
+
+function renderLobby() {
+  els.lobbyAiCount.textContent = String(aiCount);
+  els.lobbyAiLabel.textContent = aiCount === 1 ? 'avversario' : 'avversari';
+  const total = 1 + aiCount;
+  els.lobbyTotal.textContent = `Tu + ${aiCount} IA · ${total} giocatori`;
+  els.lobbySlots.innerHTML = PLAYER_SLOTS.slice(0, total)
+    .map(
+      (s) =>
+        `<span class="lobby-slot"><i style="background:${s.color}"></i>${s.id === 'P1' ? 'Tu' : s.name.replace(/^IA /, '')}</span>`
+    )
+    .join('');
+  els.lobbyMinus.disabled = aiCount <= 1;
+  els.lobbyPlus.disabled = aiCount >= MAX_AI;
+  els.lobbyCancel.classList.toggle('hidden', !state);
+}
+
+function openLobby() {
+  renderLobby();
+  els.lobby.classList.remove('hidden');
+}
+
+function closeLobby() {
+  els.lobby.classList.add('hidden');
+}
+
 function newGame() {
-  state = createGame({ seed: Date.now() & 0xffffffff });
+  persistAiCount();
+  state = createGame({ seed: Date.now() & 0xffffffff, aiCount });
   ui.selectedId = null;
   ui.selectedCardIndex = null;
   ui.mode = null;
   ui.marchFrom = null;
   ui.missionExpanded = false;
-  ui.opponentExpanded = false;
+  ui.expandedOpponentId = null;
   pendingFortify = null;
   lastShownBattleKey = null;
   busy = false;
+  closeLobby();
   els.overlay.classList.add('hidden');
   els.fortifyModal.classList.add('hidden');
   els.diceOverlay.classList.add('hidden');
@@ -164,6 +222,10 @@ els.fortifyConfirm.addEventListener('click', () => {
 
 
 function refresh() {
+  if (!state) {
+    els.mapHint.textContent = 'Scegli gli avversari IA per iniziare.';
+    return;
+  }
   ui.highlightIds = computeHighlights(state, ui);
   renderMap(els.map, state, ui, onTerritoryClick);
   renderHud(els, state, ui);
@@ -180,14 +242,14 @@ function updateHint() {
   }
   if (state.phase === 'setup') {
     if (!state.players[pid].isHuman) {
-      els.mapHint.textContent = 'Schieramento IA…';
+      els.mapHint.textContent = `Schieramento ${state.players[pid].name}…`;
       return;
     }
     els.mapHint.textContent = `Schieramento: clicca un tuo territorio (+1). Rimangono ${state.players[pid].setupRemaining} armate.`;
     return;
   }
   if (!state.players[pid].isHuman) {
-    els.mapHint.textContent = 'Turno IA…';
+    els.mapHint.textContent = `Turno ${state.players[pid].name}…`;
     return;
   }
   if (state.pendingDrawAfterDiscard) {
@@ -236,12 +298,12 @@ function checkOverlay() {
   els.overlay.classList.remove('hidden');
   els.overlayTitle.textContent = winner.isHuman ? 'Vittoria!' : 'Sconfitta';
   els.overlayBody.textContent = winner.isHuman
-    ? 'Hai conquistato il mondo.'
-    : 'L’IA ha preso il controllo del pianeta.';
+    ? 'Hai completato il tuo obiettivo.'
+    : `${winner.name} ha preso il controllo del pianeta.`;
 }
 
 function onTerritoryClick(id) {
-  if (busy) return;
+  if (busy || !state) return;
   const pid = state.currentPlayerId;
   if (!state.players[pid]?.isHuman || state.phase === 'game_over') return;
   if (state.pendingDrawAfterDiscard) return;
@@ -435,14 +497,16 @@ ui.onClearCombatCard = () => {
 };
 
 function maybeRunAi() {
-  if (state.phase === 'game_over') {
-    refresh();
+  if (!state || state.phase === 'game_over') {
+    if (state) refresh();
     return;
   }
   if (state.players[state.currentPlayerId].isHuman) return;
   if (busy) return;
 
-  els.mapHint.textContent = state.phase === 'setup' ? 'Schieramento IA…' : 'Turno IA…';
+  els.mapHint.textContent = state.phase === 'setup'
+    ? `Schieramento ${state.players[state.currentPlayerId].name}…`
+    : `Turno ${state.players[state.currentPlayerId].name}…`;
   setTimeout(async () => {
     let guard = 0;
     while (
@@ -472,8 +536,27 @@ function maybeRunAi() {
   }, state.phase === 'setup' ? 120 : 350);
 }
 
-document.getElementById('btn-new').addEventListener('click', newGame);
-document.getElementById('btn-overlay-new').addEventListener('click', newGame);
+document.getElementById('btn-new').addEventListener('click', openLobby);
+document.getElementById('btn-overlay-new').addEventListener('click', () => {
+  els.overlay.classList.add('hidden');
+  openLobby();
+});
+
+els.lobbyMinus.addEventListener('click', () => {
+  if (aiCount <= 1) return;
+  aiCount -= 1;
+  renderLobby();
+});
+els.lobbyPlus.addEventListener('click', () => {
+  if (aiCount >= MAX_AI) return;
+  aiCount += 1;
+  renderLobby();
+});
+els.lobbyStart.addEventListener('click', newGame);
+els.lobbyCancel.addEventListener('click', () => {
+  if (!state) return;
+  closeLobby();
+});
 
 const appEl = document.getElementById('app');
 const btnRail = document.getElementById('btn-rail');
@@ -489,7 +572,10 @@ btnRail?.addEventListener('click', () => {
 });
 railBackdrop?.addEventListener('click', () => setRailOpen(false));
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape') setRailOpen(false);
+  if (ev.key === 'Escape') {
+    setRailOpen(false);
+    if (state && !els.lobby.classList.contains('hidden')) closeLobby();
+  }
 });
 
 els.playerMission.addEventListener('click', () => {
@@ -497,8 +583,11 @@ els.playerMission.addEventListener('click', () => {
   refresh();
 });
 
-els.opponentPanel.addEventListener('click', () => {
-  ui.opponentExpanded = !ui.opponentExpanded;
+els.opponentPanel.addEventListener('click', (ev) => {
+  const row = ev.target.closest('[data-opp-id]');
+  if (!row) return;
+  const id = row.dataset.oppId;
+  ui.expandedOpponentId = ui.expandedOpponentId === id ? null : id;
   refresh();
 });
 
@@ -513,4 +602,4 @@ document.querySelector('.hud-stack')?.addEventListener('click', (ev) => {
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
 });
 
-newGame();
+openLobby();

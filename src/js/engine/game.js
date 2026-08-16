@@ -1,4 +1,10 @@
-import { TERRITORIES, CONTINENTS, buildAdjacencyMap, TERRITORY_IDS, INITIAL_ARMIES_2P } from '../data/map.js';
+import {
+  TERRITORIES,
+  CONTINENTS,
+  buildAdjacencyMap,
+  TERRITORY_IDS,
+  INITIAL_ARMIES_BY_PLAYERS,
+} from '../data/map.js';
 import { RELICS, RELIC_IDS } from '../data/relics.js';
 import { CARDS, createCardDeck } from '../data/cards.js';
 import { EVENTS, createEventDeck } from '../data/events.js';
@@ -7,6 +13,17 @@ import { createRng } from './rng.js';
 
 export const PHASES = ['setup', 'reinforce', 'attack', 'fortify', 'game_over'];
 export const BASE_HAND_SIZE = 5;
+export const MIN_PLAYERS = 2;
+export const MAX_PLAYERS = 6;
+
+export const PLAYER_SLOTS = [
+  { id: 'P1', name: 'IA Blu', color: '#3b82f6' },
+  { id: 'P2', name: 'IA Rossa', color: '#ef4444' },
+  { id: 'P3', name: 'IA Verde', color: '#16a34a' },
+  { id: 'P4', name: 'IA Gialla', color: '#ca8a04' },
+  { id: 'P5', name: 'IA Viola', color: '#7c3aed' },
+  { id: 'P6', name: 'IA Arancio', color: '#ea580c' },
+];
 
 const ADJACENCY = buildAdjacencyMap();
 
@@ -20,6 +37,32 @@ function log(state, message, extra = {}) {
 
 export function getPlayerTerritories(state, playerId) {
   return TERRITORY_IDS.filter((id) => state.territories[id].owner === playerId);
+}
+
+export function getAlivePlayerIds(state) {
+  return (state.playerOrder || Object.keys(state.players)).filter(
+    (id) => getPlayerTerritories(state, id).length > 0
+  );
+}
+
+function nextAlivePlayerId(state, fromId) {
+  const order = state.playerOrder || Object.keys(state.players);
+  const start = Math.max(0, order.indexOf(fromId));
+  for (let i = 1; i <= order.length; i++) {
+    const id = order[(start + i) % order.length];
+    if (getPlayerTerritories(state, id).length > 0) return id;
+  }
+  return fromId;
+}
+
+function nextSetupPlayerId(state, fromId) {
+  const order = state.playerOrder || Object.keys(state.players);
+  const start = Math.max(0, order.indexOf(fromId));
+  for (let i = 1; i <= order.length; i++) {
+    const id = order[(start + i) % order.length];
+    if (state.players[id].setupRemaining > 0) return id;
+  }
+  return null;
 }
 
 export function getContinentBonus(state, playerId) {
@@ -217,26 +260,22 @@ function revealEvent(state) {
 }
 
 function checkVictory(state) {
-  for (const p of Object.values(state.players)) {
+  const alive = getAlivePlayerIds(state);
+  if (alive.length === 1) {
+    const winner = state.players[alive[0]];
+    state.phase = 'game_over';
+    state.winnerId = winner.id;
+    log(state, `${winner.name} conquista il mondo!`, { type: 'victory' });
+    return true;
+  }
+
+  for (const id of alive) {
+    const p = state.players[id];
     if (checkMission(state, p.id)) {
       state.phase = 'game_over';
       state.winnerId = p.id;
       const mission = MISSIONS[p.missionId];
       log(state, `${p.name} completa l’obiettivo «${mission.name}»!`, { type: 'victory' });
-      return true;
-    }
-    const owned = getPlayerTerritories(state, p.id).length;
-    if (owned === TERRITORY_IDS.length) {
-      state.phase = 'game_over';
-      state.winnerId = p.id;
-      log(state, `${p.name} conquista il mondo!`, { type: 'victory' });
-      return true;
-    }
-    if (owned === 0) {
-      const winner = Object.values(state.players).find((x) => x.id !== p.id);
-      state.phase = 'game_over';
-      state.winnerId = winner.id;
-      log(state, `${winner.name} elimina ${p.name}!`, { type: 'victory' });
       return true;
     }
   }
@@ -245,63 +284,71 @@ function checkVictory(state) {
 
 /**
  * Create initial game state.
- * @param {{ seed?: number, humanId?: string }} opts
+ * @param {{ seed?: number, humanId?: string, playerCount?: number, aiCount?: number }} opts
  */
 export function createGame(opts = {}) {
   const rng = createRng(opts.seed ?? Date.now());
   const humanId = opts.humanId ?? 'P1';
+  const fromAi = opts.aiCount != null ? 1 + Number(opts.aiCount) : null;
+  const playerCount = Math.min(
+    MAX_PLAYERS,
+    Math.max(MIN_PLAYERS, Number(opts.playerCount ?? fromAi ?? 2))
+  );
+  const playerOrder = PLAYER_SLOTS.slice(0, playerCount).map((s) => s.id);
+  const startArmies = INITIAL_ARMIES_BY_PLAYERS[playerCount] ?? INITIAL_ARMIES_BY_PLAYERS[2];
 
-  const players = {
-    P1: {
-      id: 'P1',
-      name: humanId === 'P1' ? 'Tu' : 'IA',
-      isHuman: humanId === 'P1',
-      color: '#3b82f6',
+  const players = {};
+  for (const slot of PLAYER_SLOTS.slice(0, playerCount)) {
+    const isHuman = slot.id === humanId;
+    players[slot.id] = {
+      id: slot.id,
+      name: isHuman ? 'Tu' : slot.name,
+      isHuman,
+      color: slot.color,
       relicId: null,
       missionId: null,
+      missionTargetId: null,
       hand: [],
       setupRemaining: 0,
-    },
-    P2: {
-      id: 'P2',
-      name: humanId === 'P2' ? 'Tu' : 'IA',
-      isHuman: humanId === 'P2',
-      color: '#ef4444',
-      relicId: null,
-      missionId: null,
-      hand: [],
-      setupRemaining: 0,
-    },
-  };
+    };
+  }
 
   const relicPool = rng.shuffle(RELIC_IDS);
-  players.P1.relicId = relicPool[0];
-  players.P2.relicId = relicPool[1];
-
   const missionPool = rng.shuffle(MISSION_IDS);
-  players.P1.missionId = missionPool[0];
-  players.P2.missionId = missionPool[1];
+  const othersOf = (pid) => playerOrder.filter((id) => id !== pid);
+
+  playerOrder.forEach((pid, i) => {
+    players[pid].relicId = relicPool[i];
+    players[pid].missionId = missionPool[i];
+    if (players[pid].missionId === 'eliminate_enemy') {
+      const others = othersOf(pid);
+      players[pid].missionTargetId = others.length ? rng.pick(others) : null;
+    }
+  });
 
   const shuffledTerr = rng.shuffle(TERRITORY_IDS);
   const territories = {};
   for (let i = 0; i < shuffledTerr.length; i++) {
     const id = shuffledTerr[i];
-    const owner = i % 2 === 0 ? 'P1' : 'P2';
+    const owner = playerOrder[i % playerCount];
     territories[id] = { id, owner, armies: 1 };
   }
 
-  // Remaining armies placed alternately during setup phase (40 - 21 = 19 each)
-  players.P1.setupRemaining = INITIAL_ARMIES_2P - getPlayerTerritories({ territories }, 'P1').length;
-  players.P2.setupRemaining = INITIAL_ARMIES_2P - getPlayerTerritories({ territories }, 'P2').length;
+  const terrState = { territories };
+  for (const pid of playerOrder) {
+    players[pid].setupRemaining = startArmies - getPlayerTerritories(terrState, pid).length;
+  }
 
   const state = {
     version: 1,
     seed: rng.seed,
     rng,
     players,
+    playerOrder,
+    playerCount,
     territories,
     adjacency: ADJACENCY,
-    currentPlayerId: 'P1',
+    currentPlayerId: playerOrder[0],
     round: 0,
     turnsInRound: 0,
     phase: 'setup',
@@ -322,11 +369,16 @@ export function createGame(opts = {}) {
     log: [],
   };
 
-  log(state, `Partita iniziata (seed ${state.seed}).`);
-  log(state, `Schieramento: 1 armata per territorio; piazzate a turni le rimanenti.`);
-  log(state, `P1 reliquia: ${RELICS[players.P1.relicId].name}. Obiettivo segreto assegnato.`);
-  log(state, `P2 reliquia: ${RELICS[players.P2.relicId].name}. Obiettivo segreto assegnato.`);
-  log(state, `Piazzamento: ${players.P1.name} — ${players.P1.setupRemaining} armate da schierare.`);
+  log(state, `Partita iniziata (${playerCount} giocatori, seed ${state.seed}).`);
+  log(state, `Schieramento: 1 armata per territorio; ${startArmies} armate a testa, il resto a turni.`);
+  for (const pid of playerOrder) {
+    const p = players[pid];
+    log(state, `${p.name} reliquia: ${RELICS[p.relicId].name}. Obiettivo segreto assegnato.`);
+  }
+  log(
+    state,
+    `Piazzamento: ${players[playerOrder[0]].name} — ${players[playerOrder[0]].setupRemaining} armate da schierare.`
+  );
   return state;
 }
 
@@ -457,18 +509,20 @@ function placeReinforcement(state, action) {
     state.players[pid].setupRemaining -= 1;
     log(state, `Schieramento: +1 su ${TERRITORIES[tid].name} (restano ${state.players[pid].setupRemaining}).`);
 
-    const other = pid === 'P1' ? 'P2' : 'P1';
-    if (state.players[other].setupRemaining > 0) {
-      state.currentPlayerId = other;
-      log(state, `Schieramento: turno di ${state.players[other].name} (${state.players[other].setupRemaining} rimaste).`);
-    } else if (state.players[pid].setupRemaining > 0) {
-      // other finished; current keeps placing
-      log(state, `${state.players[other].name} ha finito lo schieramento.`);
-    } else {
+    const next = nextSetupPlayerId(state, pid);
+    if (!next) {
       log(state, 'Schieramento completato. Inizia la partita!');
-      state.currentPlayerId = 'P1';
+      state.currentPlayerId = state.playerOrder[0];
       state.round = 1;
       beginPlayerTurn(state);
+    } else {
+      state.currentPlayerId = next;
+      if (next !== pid) {
+        log(
+          state,
+          `Schieramento: turno di ${state.players[next].name} (${state.players[next].setupRemaining} rimaste).`
+        );
+      }
     }
     return state;
   }
@@ -552,18 +606,20 @@ function endTurn(state) {
   if (checkVictory(state)) return state;
 
   state.turnsInRound += 1;
-  if (state.turnsInRound >= 2) {
+  const from = state.currentPlayerId;
+  const living = getAlivePlayerIds(state);
+  const next = nextAlivePlayerId(state, from);
+  const fromIdx = living.indexOf(from);
+  const nextIdx = living.indexOf(next);
+  if (fromIdx === -1 || nextIdx <= fromIdx) {
     state.turnsInRound = 0;
     state.round += 1;
-    // Reveal event from end of round 2 onward (when round becomes 3? Plan: "from end of round 2")
-    // After both players finished round 2, turnsInRound hits 2, round becomes 3.
-    // Plan: "dalla fine del round 2". So after round 2 completes, reveal event for the upcoming round.
     if (state.round >= 3) {
       revealEvent(state);
     }
   }
 
-  state.currentPlayerId = state.currentPlayerId === 'P1' ? 'P2' : 'P1';
+  state.currentPlayerId = next;
   beginPlayerTurn(state);
   return state;
 }
@@ -701,6 +757,7 @@ function resolveAttack(state, action) {
       { type: 'conquer' }
     );
     if (getPlayerTerritories(state, prevOwner).length === 0) {
+      log(state, `${state.players[pid].name} elimina ${state.players[prevOwner].name}!`, { type: 'victory' });
       checkVictory(state);
     }
   } else {

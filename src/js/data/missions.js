@@ -1,6 +1,6 @@
 import { CONTINENTS } from './map.js';
 
-/** Secret objectives (Italian Risiko–style), adapted for 2 players. */
+/** Secret objectives (Italian Risiko–style). */
 
 function countOwned(state, pid) {
   return Object.values(state.territories).filter((t) => t.owner === pid).length;
@@ -59,10 +59,11 @@ export const MISSIONS = {
   eliminate_enemy: {
     id: 'eliminate_enemy',
     name: 'Eliminazione',
-    description: 'Elimina l’avversario (conquista tutti i suoi territori).',
+    description: 'Elimina il giocatore indicato (conquista tutti i suoi territori).',
     check: (state, pid) => {
-      const other = pid === 'P1' ? 'P2' : 'P1';
-      return countOwned(state, other) === 0;
+      const target = state.players[pid]?.missionTargetId;
+      if (!target || target === pid) return false;
+      return countOwned(state, target) === 0 && countOwned(state, pid) > 0;
     },
   },
 };

@@ -198,7 +198,16 @@ export function buildAdjacencyMap() {
 }
 
 export const TERRITORY_IDS = Object.keys(TERRITORIES);
-export const INITIAL_ARMIES_2P = 40;
+
+/** Classic Risk starting armies by total player count. */
+export const INITIAL_ARMIES_BY_PLAYERS = {
+  2: 40,
+  3: 35,
+  4: 30,
+  5: 25,
+  6: 20,
+};
+export const INITIAL_ARMIES_2P = INITIAL_ARMIES_BY_PLAYERS[2];
 
 /**
  * Sea routes drawn on the map. `via` = quadratic control point in map coords
