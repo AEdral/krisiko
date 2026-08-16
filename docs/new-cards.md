@@ -62,8 +62,8 @@ Se l’effetto parla di dadi / di *questo lancio*, serve un combattimento in cor
 | **Isolamento** | 2 | Instant | Scegli un territorio: non può **attaccare** né **spostare** armate fino al tuo prossimo turno. (Può ancora ricevere rinforzi e essere attaccato.) |
 | **Furto** | 2 | Action | Guarda la mano avversaria e **prendi** 1 carta. |
 | **Approvvigionamenti** | 2 | Action | **+4** armate, dove vuoi (tuoi territori; anche tutte sullo stesso). |
-| | 2 | | *slot vuoto* |
-| | 2 | | *slot vuoto* |
+| **Sciacallo** | 2 | Instant | In risposta a una carta **comune** appena giocata (non rara, non epica, non jolly): quella carta **risolve comunque**. Poi, invece di andare allo scarto / rimescolio, **la prendi in mano**. Se la mano è piena, scarti 1 poi la prendi. |
+| **Preveggenza** | 2 | Action | Guarda le **prime 4** carte del mazzo. Aggiungine **2** alla mano; le altre in fondo **nell’ordine che vuoi**. Se nel mazzo ce ne sono meno di 4, guardi quelle che ci sono. Se la mano non ha spazio per 2, prendi quante puoi (limite mano). Rider, se scatta, prima. |
 
 2+2+2+2+2+2 = **12**.
 
@@ -73,17 +73,15 @@ Se l’effetto parla di dadi / di *questo lancio*, serve un combattimento in cor
 
 | Carta | Copie | Tempo | Effetto |
 |--------|-------|-------|---------|
-| | 1 | | *slot vuoto* |
-| | 1 | | *slot vuoto* |
-| | 1 | | *slot vuoto* |
-| | 1 | | *slot vuoto* |
-| | 1 | | *slot vuoto* |
-| | 1 | | *slot vuoto* |
+| **Riesumazione** | 1 | Instant | **Ogni giocatore** recluta armate pari a quelle **che ha perso in questo turno**. Le piazza dove vuole, sui propri territori. Chi non ha perso armate non riceve nulla (il rider, se scatta per te, sì). |
+| **Chaos** | 1 | Action | Cambi fino a **tre** eventi ambientali (cap di **default**): scarti quelli attivi che vuoi sostituire e ne riveli altrettanti dal mazzo eventi (restano in gioco insieme, max 3). Puoi rivelarne di nuovi anche se non ce n’era nessuno. I non usati restano nel mazzo. I jolly possono spingere il cap a 4 e 5 (vedi sotto). |
+| **Arcana** | 1 | Action | Pesca **1 reliquia per ogni giocatore**. Tu ne scegli una e passi le restanti al giocatore successivo in senso orario; lui fa lo stesso, finché l’ultimo ottiene l’ultima carta. Ognuno mette in gioco la reliquia scelta (si aggiunge a quelle già possedute). |
+| **Pestilenza** | 1 | Action | Su **ogni territorio**, rimuovi **1/3** delle armate, **arrotondato per difetto**. I territori con 1–2 armate non cambiano. Nessun territorio resta a 0. Colpisce tutti. |
+| **Onniscienza** | 1 | Action | Guarda le mani di **tutti gli altri** giocatori e scarta **1 carta** da ciascuna. Chi ha la mano vuota non scarta. |
+| **Tradimento** | 1 | Action | Scegli un territorio **non tuo** con **esattamente 1 armata**. Quell’armata (e il territorio) diventa tua. |
 
-Idee in sospeso (nessuna chiusa):
+Idee in sospeso:
 
-- **Chaos** — Cambi fino a **tre** eventi ambientali. Dettaglio da chiudere: sostituire l’evento attivo, pescarne di nuovi, scartare/rimescolare il mazzo eventi, ecc.
-- **Arcana** — Peschi una carta reliquia per ogni giocatore, ne segli una e passi le restanti al giocatore in senso orario, lui farà lo stessso finché l'ultimo giocatore non otterrà l'ultima carta.
 - **Assalto totale** (combat) — In un combattimento tiri **1 dado d’attacco in più** oltre il limite (4 vs 2). Ruling da fare con eventi tipo Nebbia (max dadi): l’epica dovrebbe bypassare, altrimenti non è epica.
 - **Esecuzione** (combat) — Dopo i dadi, se il difensore ha una sola armata, puoi eliminarla e conquistare. Meglio se si **dichiara prima** del lancio (assicurazione), non dopo aver visto il risultato.
 - **Gelo assoluto** (instant) — Upgrade di Isolamento: il territorio non attacca, non sposta, **non riceve rinforzi**, fino all’inizio del tuo prossimo turno. Isolamento resta la versione rara (niente lock ai rinforzi).
@@ -94,15 +92,13 @@ Non ripetere in epica lo stesso verbo della rara a volume minore, salvo Isolamen
 
 ## Jolly (2)
 
-Senza territorio (**niente rider**). **Non** si negano. L’effetto deve valere un’epica **più** il +2 che non hanno. Non sono wild da tris (i tris non ci sono).
+Senza territorio (**niente rider**). **Non** si negano. Non sono wild da tris.
+
+**Disordine (tutti i jolly):** gli eventi ambientali attivi di default sono al massimo **3**. Quando giochi un jolly, **subito** riveli **+1 evento** dal mazzo e lo metti in gioco **in aggiunta** (non sostituisce). Il primo jolly fa **3→4**, il secondo **4→5**. Quegli slot extra restano per il resto della partita.
 
 | Carta | Copie | Tempo | Effetto |
 |--------|-------|-------|---------|
-| | 1 | | *slot vuoto* |
-| | 1 | | *slot vuoto* |
+| **Voltagabbana** | 1 | Action | Guarda l’obiettivo di un avversario. **Puoi** scambiarlo col tuo (restano segreti). Poi applica **Disordine** (+1 evento). |
+| **Doppio mandato** | 1 | Action | Guarda **1** obiettivo non in gioco dal mazzo missioni. **Puoi** sostituire il tuo con quello (il vecchio torna coperto tra i non usati). Se rifiuti, l’obiettivo visto torna nel mazzo. Poi applica **Disordine** (+1 evento). |
 
-Idee in sospeso:
-
-- Effetto che **non sta su un territorio** (altrimenti è un’epica senza rider): pesca 3 e giocane 1; sostituisci l’evento globale; una conquista senza battaglia; il +2 del rider **sempre**, come se ogni terra fosse tua.
-- In 1v1, 2/44 si possono non vedere: se il jolly è identità del prodotto, almeno uno nel terzo inferiore del mazzo, o entra dopo il primo rimescolio.
-- Non cumulabili col ruolo “wild da set”: o bomba da partita, o niente.
+Idee in sospeso: niente (jolly chiusi). Cap eventi **5** se escono entrambi.
