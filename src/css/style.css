@@ -690,6 +690,8 @@ html, body {
   display: grid;
   place-items: center;
   z-index: 40;
+  overflow-y: auto;
+  padding: 1rem 0;
 }
 .overlay.hidden { display: none; }
 
@@ -710,6 +712,8 @@ html, body {
 .lobby-modal {
   max-width: 420px;
   width: min(420px, calc(100vw - 2rem));
+  max-height: min(92vh, 720px);
+  overflow-y: auto;
 }
 .lobby-lead {
   color: var(--muted);
@@ -778,6 +782,93 @@ html, body {
   color: var(--muted);
   font-size: 0.85rem;
 }
+.lobby-modes {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: center;
+  margin: 0 0 0.85rem;
+}
+.lobby-mode {
+  min-width: 6.5rem;
+}
+.lobby-mode.is-on {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.lobby-name-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: left;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 700;
+  margin: 0 0 0.85rem;
+}
+.lobby-name-label input {
+  font: inherit;
+  font-size: 0.95rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+}
+.lobby-error {
+  color: var(--danger);
+  font-size: 0.82rem;
+  margin: 0 0 0.75rem;
+}
+.lobby-wait {
+  text-align: left;
+  margin-bottom: 0.75rem;
+}
+.lobby-link-row {
+  display: flex;
+  gap: 0.35rem;
+  margin: 0 0 0.75rem;
+}
+.lobby-link-row input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
+}
+.lobby-wait-seats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.55rem;
+}
+.lobby-seat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.45rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+}
+.lobby-seat-row .dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+
 .lobby-actions {
   display: flex;
   justify-content: center;

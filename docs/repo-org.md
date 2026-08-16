@@ -15,7 +15,7 @@ Un chatbot che deve **imparare o replicare il metodo** legge questo file. Un cha
 
 1. Leggi questo playbook per intero prima di creare o cambiare albero, Docker, Compose, Helm, workflow, `.gitignore`, `.dockerignore`, Pages.
 2. Non introdurre bundler, backend, env var o publish su push a `main`, salvo richiesta esplicita.
-3. `src/` è l’unico artefatto runtime. Path degli asset **relativi**. Test di smoke esclusi dall’immagine.
+3. `src/` è l’artefatto frontend. Path degli asset **relativi**. Test di smoke esclusi dall’immagine. Un backend (`server/`) solo se previsto in [3bis](#3bis-server-opzionale-stanze--realtime).
 4. Release = tag Git SemVer `vMAJOR.MINOR.PATCH`. I commit non pubblicano.
 5. Il README di ogni nuovo repo segue la sezione [README di istanza](#11-readme-di-istanza). Il prodotto (regole di gioco, API, ecc.) sta in `docs/`, non nel playbook.
 6. Se cambi il metodo, aggiorna **questo file**. Se cambi nomi/URL di un progetto, aggiorna il **README**.
@@ -101,7 +101,7 @@ npm start
 # → npx serve src  →  http://localhost:3000
 ```
 
-`package.json` minimo:
+`package.json` minimo (app solo statica):
 
 ```json
 {
@@ -117,6 +117,8 @@ npm start
 ```
 
 Nessuna dipendenza in `dependencies`: `serve` arriva via `npx` al momento.
+
+Se il prodotto ha **stanze realtime** (multiplayer), vedi [3bis](#3bis-server-opzionale-stanze--realtime): `npm start` diventa `node server/index.js` e compare `ws` in `dependencies`.
 
 ---
 
@@ -184,6 +186,21 @@ src/js/smoke-test.js
 | file di test sotto `src/` | non devono essere scaricabili dal browser in produzione |
 
 Aggiungi qui tutto ciò che sta in `src/` ma non è parte del prodotto (fixture, script di smoke, ecc.).
+
+---
+
+## 3bis. Server opzionale (stanze / realtime)
+
+Solo se il prodotto richiede partite online. Altrimenti resta nginx + `src/` come sopra.
+
+- `server/` è un processo Node che **serve `src/`** come statico, espone `GET /health` e WebSocket `/ws`.
+- Stanze **in memoria**, accessibili solo via link. Niente account, classifiche o database.
+- Helm: `replicaCount: 1` (altrimenti le stanze non si vedono tra pod). Probe su `/health`. Timeout ingress lunghi per il WS.
+- GitHub Pages continua a pubblicare **solo** `src/` (senza online).
+- `npm start` → `node server/index.js`. Dipendenza: `ws`.
+- Dockerfile: `node:*-alpine`, `npm ci --omit=dev`, `CMD ["node", "server/index.js"]`, `PORT=80`.
+
+Contratto: non aggiungere un backend “perché magari servirà”. Solo su richiesta esplicita di multiplayer/stanze.
 
 ---
 

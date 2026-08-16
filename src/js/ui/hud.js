@@ -83,8 +83,14 @@ function missionText(state, player) {
   return { name: mission.name, description };
 }
 
+function localPlayer(state, ui) {
+  const me = ui.localPlayerId || Object.values(state.players).find((p) => p.isHuman)?.id;
+  return me ? state.players[me] : null;
+}
+
 function opponentsHtml(state, ui) {
-  const human = Object.values(state.players).find((p) => p.isHuman);
+  const human = localPlayer(state, ui);
+  if (!human) return '';
   const others = (state.playerOrder || Object.keys(state.players)).filter((id) => id !== human.id);
   const alive = new Set(getAlivePlayerIds(state));
   const rows = others
@@ -104,14 +110,14 @@ function opponentsHtml(state, ui) {
             <div class="stat-chip"><span class="k">Bonus</span><span class="v">+${getContinentBonus(state, id)}</span></div>
           </div>
           <div class="relic-mini">
-            <div class="name">Reliquia: ${escapeHtml(relic.name)}</div>
+            <div class="name">Reliquia: ${escapeHtml(relic?.name || '—')}</div>
           </div>
           <div class="opp-expand-hint">Clic per dettagli ▾</div>
         </div>
         <div class="opp-details">
           <div class="opp-details-inner">
             <div class="relic-mini">
-              <div class="desc">${escapeHtml(relic.description)}</div>
+              <div class="desc">${escapeHtml(relic?.description || '')}</div>
             </div>
             <div class="relic-mini">
               <div class="name">Obiettivo: segreto</div>
@@ -132,9 +138,11 @@ function opponentsHtml(state, ui) {
 export function renderHud(els, state, ui) {
   const pid = state.currentPlayerId;
   const player = state.players[pid];
-  const human = Object.values(state.players).find((p) => p.isHuman);
+  const human = localPlayer(state, ui);
+  if (!human) return;
   const mission = missionText(state, human);
   const relic = RELICS[human.relicId];
+  const myTurn = pid === human.id;
 
   const setupHint =
     state.phase === 'setup'
@@ -143,9 +151,9 @@ export function renderHud(els, state, ui) {
 
   els.topMeta.innerHTML = `
     <span class="pill">${state.phase === 'setup' ? 'Setup' : `Round ${state.round}`}</span>
-    <span class="pill ${player.isHuman ? 'turn' : ''}" style="box-shadow:inset 0 0 0 1px ${player.color}">Turno: ${escapeHtml(player.name)}</span>
+    <span class="pill ${myTurn ? 'turn' : ''}" style="box-shadow:inset 0 0 0 1px ${player.color}">Turno: ${escapeHtml(player.name)}</span>
     <span class="pill">Fase: ${phaseLabel(state.phase)}</span>
-    ${state.phase === 'reinforce' && player.isHuman ? `<span class="pill turn">Rinforzi: ${state.reinforcementsRemaining}</span>` : ''}
+    ${state.phase === 'reinforce' && myTurn ? `<span class="pill turn">Rinforzi: ${state.reinforcementsRemaining}</span>` : ''}
     ${setupHint}
   `;
 
@@ -166,8 +174,8 @@ export function renderHud(els, state, ui) {
 
   els.playerRelic.innerHTML = `
     <div class="tray-label">Reliquia</div>
-    <div class="rname">${escapeHtml(relic.name)}</div>
-    <div class="rdesc">${escapeHtml(relic.description)}</div>
+    <div class="rname">${escapeHtml(relic?.name || '—')}</div>
+    <div class="rdesc">${escapeHtml(relic?.description || '')}</div>
   `;
 
   els.playerMission.innerHTML = `
@@ -222,6 +230,7 @@ function renderHand(el, state, human, ui) {
   }
   human.hand.forEach((cardId, index) => {
     const card = CARDS[cardId];
+    if (!card) return;
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'card' + (ui.selectedCardIndex === index ? ' selected' : '');
@@ -245,13 +254,17 @@ function renderLog(el, state) {
 export function renderActions(el, state, ui) {
   el.innerHTML = '';
   const pid = state.currentPlayerId;
+  const me = localPlayer(state, ui);
+  const myTurn = !!me && pid === me.id;
   if (state.phase === 'game_over') return;
 
   if (state.pendingInvasion) {
     const hint = document.createElement('p');
     hint.className = 'line';
     hint.style.margin = '0';
-    hint.textContent = 'Scegli quante armate spostare nella zona conquistata.';
+    hint.textContent = myTurn
+      ? 'Scegli quante armate spostare nella zona conquistata.'
+      : `${state.players[pid].name} sta spostando le armate…`;
     el.appendChild(hint);
     return;
   }
@@ -260,14 +273,14 @@ export function renderActions(el, state, ui) {
     const hint = document.createElement('p');
     hint.className = 'line';
     hint.style.margin = '0';
-    hint.textContent = state.players[pid].isHuman
+    hint.textContent = myTurn
       ? `Schiera 1 armata (${state.players[pid].setupRemaining} rimaste).`
       : `${state.players[pid].name} sta schierando…`;
     el.appendChild(hint);
     return;
   }
 
-  if (!state.players[pid]?.isHuman) return;
+  if (!myTurn) return;
 
   if (state.pendingDrawAfterDiscard) {
     const hint = document.createElement('p');

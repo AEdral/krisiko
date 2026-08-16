@@ -102,18 +102,50 @@
 
     <div id="lobby" class="overlay">
       <div class="modal lobby-modal">
-        <h2>Nuova partita</h2>
-        <p class="lobby-lead">Quanti avversari IA? Massimo 6 giocatori in totale.</p>
-        <div class="lobby-stepper">
-          <button type="button" id="lobby-ai-minus" class="btn btn-ghost lobby-step" aria-label="Meno IA">−</button>
-          <div class="lobby-ai-value">
-            <span id="lobby-ai-count">1</span>
-            <span class="lobby-ai-label" id="lobby-ai-label">IA</span>
-          </div>
-          <button type="button" id="lobby-ai-plus" class="btn btn-ghost lobby-step" aria-label="Più IA">+</button>
+        <h2 id="lobby-title">Nuova partita</h2>
+        <div class="lobby-modes" id="lobby-modes">
+          <button type="button" id="lobby-mode-local" class="btn lobby-mode is-on">Locale</button>
+          <button type="button" id="lobby-mode-online" class="btn btn-ghost lobby-mode">Online</button>
         </div>
-        <div class="lobby-slots" id="lobby-slots"></div>
-        <p class="lobby-total" id="lobby-total"></p>
+        <p class="lobby-lead hidden" id="lobby-join-lead">Scegli il tuo nome, poi conferma per entrare. Il link non porta il nome di chi ha creato la stanza.</p>
+        <label class="lobby-name-label">
+          Il tuo nome
+          <input type="text" id="lobby-name" maxlength="20" placeholder="Giocatore" autocomplete="nickname" />
+        </label>
+        <div id="lobby-setup">
+          <p class="lobby-lead" id="lobby-lead">Quanti avversari IA? Massimo 6 giocatori in totale.</p>
+          <div class="lobby-stepper">
+            <button type="button" id="lobby-ai-minus" class="btn btn-ghost lobby-step" aria-label="Meno IA">−</button>
+            <div class="lobby-ai-value">
+              <span id="lobby-ai-count">1</span>
+              <span class="lobby-ai-label" id="lobby-ai-label">IA</span>
+            </div>
+            <button type="button" id="lobby-ai-plus" class="btn btn-ghost lobby-step" aria-label="Più IA">+</button>
+          </div>
+          <div id="lobby-friends-wrap" class="hidden">
+            <div class="lobby-stepper">
+              <button type="button" id="lobby-friends-minus" class="btn btn-ghost lobby-step" aria-label="Meno amici">−</button>
+              <div class="lobby-ai-value">
+                <span id="lobby-friends-count">1</span>
+                <span class="lobby-ai-label">amici (link)</span>
+              </div>
+              <button type="button" id="lobby-friends-plus" class="btn btn-ghost lobby-step" aria-label="Più amici">+</button>
+            </div>
+          </div>
+          <div class="lobby-slots" id="lobby-slots"></div>
+          <p class="lobby-total" id="lobby-total"></p>
+        </div>
+        <p class="lobby-error hidden" id="lobby-error"></p>
+        <div id="lobby-wait" class="lobby-wait hidden">
+          <p class="lobby-lead">Stanza privata — entra solo chi ha il link.</p>
+          <div class="lobby-link-row">
+            <input type="text" id="lobby-link" readonly />
+            <button type="button" id="lobby-copy" class="btn btn-ghost">Copia</button>
+          </div>
+          <div class="lobby-wait-seats" id="lobby-wait-seats"></div>
+          <p class="lobby-total" id="lobby-wait-hint"></p>
+          <button type="button" id="lobby-begin" class="btn hidden">Inizia la partita</button>
+        </div>
         <div class="lobby-actions">
           <button type="button" id="lobby-cancel" class="btn btn-ghost hidden">Annulla</button>
           <button type="button" id="lobby-start" class="btn">Inizia</button>

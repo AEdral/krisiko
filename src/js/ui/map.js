@@ -93,6 +93,7 @@ export function renderMap(svg, state, ui, onSelect) {
 
 export function computeHighlights(state, ui) {
   const pid = state.currentPlayerId;
+  if (ui.localPlayerId && pid !== ui.localPlayerId) return null;
   if (!state.players[pid]?.isHuman) return null;
 
   if (state.phase === 'setup') {

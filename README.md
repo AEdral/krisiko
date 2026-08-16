@@ -24,10 +24,20 @@ Prototipo browser: **Risiko + reliquie + carte + eventi globali**. Demo: 1 gioca
 docker compose up --build
 ```
 
-Senza Docker:
+Senza Docker (serve anche il multiplayer online):
 
 ```bash
 npm start
+```
+
+http://localhost:3000 — lobby **Online** → crea una stanza → copia il link. Gli amici aprono il link; i posti vuoti diventano IA se inizi prima. Niente account: le stanze vivono in memoria sul server.
+
+GitHub Pages resta **solo locale** (niente WebSocket).
+
+Solo statico, senza stanze:
+
+```bash
+npm run start:static
 ```
 
 ## Test
@@ -66,19 +76,21 @@ Se il job fallisce con *Get Pages site failed*: **Settings → Pages → Source:
 ## Albero
 
 ```
-src/                 runtime (HTML/CSS/JS, path relativi)
+src/                 runtime frontend (HTML/CSS/JS, path relativi)
   js/engine/         regole, stato serializzabile
   js/ai/             IA euristica
   js/ui/             mappa, HUD, dadi
+  js/net/            client WebSocket stanze
   js/data/           territori, carte, reliquie, eventi, missioni
+server/              Node: statico + WebSocket stanze (in memoria)
 helm/krisiko/        chart Kubernetes
 .github/workflows/   release su tag v*
 docs/                playbook, GDD, catalogo, asset
-Dockerfile           nginx serve src/
+Dockerfile           Node serve src/ + /ws
 docker-compose.yml   host 3080 → container 80
 ```
 
-`src/` è l’unico artefatto runtime: Compose, immagine e Pages servono quella cartella.
+`src/` è il frontend. Docker/Compose/Helm usano anche `server/` per le stanze online. Pages pubblica solo `src/` (partite locali).
 
 ## Prodotto
 

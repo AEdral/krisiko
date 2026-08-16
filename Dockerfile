@@ -1,7 +1,14 @@
-FROM nginx:1.27-alpine
+FROM node:22-alpine
 
-COPY src/ /usr/share/nginx/html/
+WORKDIR /app
 
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY server ./server
+COPY src ./src
+
+ENV PORT=80
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "server/index.js"]

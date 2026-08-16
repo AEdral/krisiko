@@ -284,25 +284,29 @@ function checkVictory(state) {
 
 /**
  * Create initial game state.
- * @param {{ seed?: number, humanId?: string, playerCount?: number, aiCount?: number }} opts
+ * @param {{ seed?: number, humanId?: string, playerCount?: number, aiCount?: number, seats?: { id?: string, name?: string, isHuman?: boolean }[] }} opts
  */
 export function createGame(opts = {}) {
   const rng = createRng(opts.seed ?? Date.now());
   const humanId = opts.humanId ?? 'P1';
+  const seatSpecs = Array.isArray(opts.seats) && opts.seats.length ? opts.seats : null;
   const fromAi = opts.aiCount != null ? 1 + Number(opts.aiCount) : null;
   const playerCount = Math.min(
     MAX_PLAYERS,
-    Math.max(MIN_PLAYERS, Number(opts.playerCount ?? fromAi ?? 2))
+    Math.max(MIN_PLAYERS, Number(seatSpecs?.length ?? opts.playerCount ?? fromAi ?? 2))
   );
   const playerOrder = PLAYER_SLOTS.slice(0, playerCount).map((s) => s.id);
   const startArmies = INITIAL_ARMIES_BY_PLAYERS[playerCount] ?? INITIAL_ARMIES_BY_PLAYERS[2];
 
   const players = {};
-  for (const slot of PLAYER_SLOTS.slice(0, playerCount)) {
-    const isHuman = slot.id === humanId;
+  for (let i = 0; i < playerCount; i++) {
+    const slot = PLAYER_SLOTS[i];
+    const spec = seatSpecs?.[i];
+    const isHuman = spec ? !!spec.isHuman : slot.id === humanId;
+    const name = spec?.name || (isHuman ? 'Tu' : slot.name);
     players[slot.id] = {
       id: slot.id,
-      name: isHuman ? 'Tu' : slot.name,
+      name,
       isHuman,
       color: slot.color,
       relicId: null,
@@ -385,7 +389,32 @@ export function createGame(opts = {}) {
 /** Serialize without RNG function. */
 export function serializeState(state) {
   const { rng, ...rest } = state;
-  return JSON.parse(JSON.stringify({ ...rest, seed: state.seed, rngState: undefined }));
+  return JSON.parse(
+    JSON.stringify({
+      ...rest,
+      seed: state.seed,
+      rngState: typeof rng?.getState === 'function' ? rng.getState() : undefined,
+    })
+  );
+}
+
+export function hydrateState(data) {
+  const copy = typeof structuredClone === 'function' ? structuredClone(data) : JSON.parse(JSON.stringify(data));
+  copy.rng = createRng(copy.seed, copy.rngState);
+  return copy;
+}
+
+/** Public view for one player: hide others' missions and card ids. */
+export function viewForPlayer(state, viewerId) {
+  const snap = serializeState(state);
+  delete snap.rngState;
+  for (const p of Object.values(snap.players || {})) {
+    if (p.id === viewerId) continue;
+    p.missionId = null;
+    p.missionTargetId = null;
+    p.hand = Array.isArray(p.hand) ? p.hand.map(() => 'hidden') : [];
+  }
+  return snap;
 }
 
 export function getLegalActions(state) {

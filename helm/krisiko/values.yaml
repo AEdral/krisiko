@@ -1,4 +1,4 @@
-replicaCount: 1
+replicaCount: 1  # stanze in memoria: una replica sola
 
 image:
   repository: krisiko
@@ -15,7 +15,9 @@ service:
 ingress:
   enabled: false
   className: ""
-  annotations: {}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
   hosts:
     - host: krisiko.local
       paths:
@@ -25,22 +27,22 @@ ingress:
 
 resources:
   limits:
-    cpu: 100m
-    memory: 64Mi
+    cpu: 250m
+    memory: 128Mi
   requests:
     cpu: 50m
-    memory: 32Mi
+    memory: 64Mi
 
 livenessProbe:
   httpGet:
-    path: /
+    path: /health
     port: http
   initialDelaySeconds: 5
   periodSeconds: 30
 
 readinessProbe:
   httpGet:
-    path: /
+    path: /health
     port: http
   initialDelaySeconds: 3
   periodSeconds: 10

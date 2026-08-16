@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "npx --yes serve src",
+    "start": "node server/index.js",
+    "start:static": "npx --yes serve src",
     "smoke": "node src/js/smoke-test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
   }
 }

@@ -3,7 +3,7 @@
  * Run: node --experimental-vm-modules smoke-test.js
  * From src/js: node smoke-test.js
  */
-import { createGame, getPlayerTerritories } from './engine/game.js';
+import { createGame, getPlayerTerritories, serializeState, hydrateState, viewForPlayer } from './engine/game.js';
 import { runAiTurn } from './ai/ai.js';
 
 function assert(cond, msg) {
@@ -82,6 +82,26 @@ function smoke() {
   while (s3.phase === 'setup' && g3++ < 200) runAiTurn(s3, { maxSteps: 5 });
   assert(s3.phase !== 'setup', '3p setup finishes');
   assert(s3.playerOrder.every((id) => s3.players[id].setupRemaining === 0), '3p all placed');
+
+  const mixed = createGame({
+    seed: 5,
+    seats: [
+      { name: 'Anna', isHuman: true },
+      { name: 'IA Rossa', isHuman: false },
+      { name: 'Bruno', isHuman: true },
+    ],
+  });
+  assert(mixed.playerCount === 3, 'seats length');
+  assert(mixed.players.P1.name === 'Anna' && mixed.players.P1.isHuman, 'host human');
+  assert(!mixed.players.P2.isHuman, 'middle AI');
+  assert(mixed.players.P3.name === 'Bruno' && mixed.players.P3.isHuman, 'friend human');
+  const view = viewForPlayer(mixed, 'P1');
+  assert(view.players.P1.missionId === mixed.players.P1.missionId, 'own mission visible');
+  assert(view.players.P3.missionId == null, 'other mission hidden');
+  assert(view.rngState === undefined, 'no rng in view');
+  const hydrated = hydrateState(serializeState(mixed));
+  assert(typeof hydrated.rng.int === 'function', 'hydrate rng');
+  assert(hydrated.players.P3.name === 'Bruno', 'hydrate names');
 
   const s2 = createGame({ seed: 99 });
   s2.players.P1.isHuman = false;
