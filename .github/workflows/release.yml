@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set version from tag
         id: meta
@@ -108,7 +108,7 @@ jobs:
             echo "helm install krisiko oci://${IMAGE}/${{ env.CHART_NAME }} --version ${VERSION}"
             echo '```'
             echo ""
-            echo "**GitHub Pages** — latest del tag (${TAG}) pubblicato su Pages"
+            echo "**GitHub Pages** — latest from tag (${TAG}) published to Pages"
           } >> "$GITHUB_STEP_SUMMARY"
 
   pages:
@@ -119,16 +119,18 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
+        with:
+          enablement: true
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: src
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

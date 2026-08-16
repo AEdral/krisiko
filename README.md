@@ -33,8 +33,11 @@ Pushing a `v*` tag runs the `Release` workflow, which:
 helm install krisiko oci://ghcr.io/aedral/krisiko/krisiko --version <VERSION>
 ```
 
-Pages demo: `https://aedral.github.io/krisiko/`  
-(Settings → Pages → Source: **GitHub Actions**)
+Pages demo: `https://aedral.github.io/krisiko/`
+
+If the Pages job fails with “Get Pages site failed”, enable it once under
+**Settings → Pages → Source: GitHub Actions**, then re-run the workflow
+(or push another `v*` tag).
 
 ## Controls
 
