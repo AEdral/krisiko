@@ -2,8 +2,10 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Krisiko</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png" />
+  <link rel="apple-touch-icon" href="assets/favicon.png" />
   <link rel="stylesheet" href="css/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -16,6 +18,10 @@
         <h1>Krisiko</h1>
       </div>
       <div class="top-meta" id="top-meta"></div>
+      <button type="button" id="btn-rail" class="btn-rail" aria-expanded="false" aria-controls="side-rail" title="Info partita">
+        <span class="btn-rail-bars" aria-hidden="true"></span>
+        <span class="sr-only">Apri pannello</span>
+      </button>
       <button type="button" id="btn-new" class="btn btn-ghost">Nuova partita</button>
     </header>
 
@@ -23,27 +29,41 @@
       <section class="map-panel">
         <svg id="map" viewBox="172 119 745 503" preserveAspectRatio="xMidYMid meet" aria-label="Mappa Krisiko"></svg>
         <div class="map-hint" id="map-hint">Seleziona un territorio</div>
+      </section>
 
-        <aside class="side-rail">
-          <div class="player-card opponent" id="opponent-panel"></div>
-          <div class="hud-block event-card" id="event-block"></div>
-          <div class="hud-actions" id="actions"></div>
-          <div class="hud-block log-card">
-            <h2>Log</h2>
-            <div id="log" class="log"></div>
+      <div class="hud-stack">
+        <aside class="side-rail" id="side-rail">
+          <div class="rail-drawer">
+            <div class="player-card opponent" id="opponent-panel"></div>
+            <div class="hud-block event-card" id="event-block"></div>
+            <div class="hud-block log-card">
+              <h2>Log</h2>
+              <div id="log" class="log"></div>
+            </div>
           </div>
+          <div class="hud-actions" id="actions"></div>
         </aside>
-      </section>
 
-      <section class="player-tray" id="player-tray">
-        <div class="tray-section tray-relic" id="player-relic"></div>
-        <div class="tray-section tray-mission" id="player-mission"></div>
-        <div class="tray-section tray-hand-wrap">
-          <div class="tray-label">Mano</div>
-          <div id="hand" class="hand"></div>
-        </div>
-        <div class="tray-section tray-dash" id="player-stats"></div>
-      </section>
+        <section class="player-tray" id="player-tray">
+          <div class="hud-fold tray-section tray-relic">
+            <button type="button" class="hud-fold-toggle" aria-expanded="false">Reliquia</button>
+            <div class="hud-fold-body" id="player-relic"></div>
+          </div>
+          <div class="hud-fold tray-section tray-mission">
+            <button type="button" class="hud-fold-toggle" aria-expanded="false">Obiettivo</button>
+            <div class="hud-fold-body tray-mission-inner" id="player-mission"></div>
+          </div>
+          <div class="tray-section tray-hand-wrap">
+            <div class="tray-label">Mano</div>
+            <div id="hand" class="hand"></div>
+          </div>
+          <div class="hud-fold tray-section tray-dash">
+            <button type="button" class="hud-fold-toggle" aria-expanded="false">Tu</button>
+            <div class="hud-fold-body" id="player-stats"></div>
+          </div>
+        </section>
+      </div>
+      <div class="rail-backdrop" id="rail-backdrop"></div>
     </main>
 
     <div id="dice-overlay" class="dice-overlay hidden">

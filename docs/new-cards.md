@@ -83,6 +83,7 @@ Se l’effetto parla di dadi / di *questo lancio*, serve un combattimento in cor
 Idee in sospeso (nessuna chiusa):
 
 - **Chaos** — Cambi fino a **tre** eventi ambientali. Dettaglio da chiudere: sostituire l’evento attivo, pescarne di nuovi, scartare/rimescolare il mazzo eventi, ecc.
+- **Arcana** — Peschi una carta reliquia per ogni giocatore, ne segli una e passi le restanti al giocatore in senso orario, lui farà lo stessso finché l'ultimo giocatore non otterrà l'ultima carta.
 - **Assalto totale** (combat) — In un combattimento tiri **1 dado d’attacco in più** oltre il limite (4 vs 2). Ruling da fare con eventi tipo Nebbia (max dadi): l’epica dovrebbe bypassare, altrimenti non è epica.
 - **Esecuzione** (combat) — Dopo i dadi, se il difensore ha una sola armata, puoi eliminarla e conquistare. Meglio se si **dichiara prima** del lancio (assicurazione), non dopo aver visto il risultato.
 - **Gelo assoluto** (instant) — Upgrade di Isolamento: il territorio non attacca, non sposta, **non riceve rinforzi**, fino all’inizio del tuo prossimo turno. Isolamento resta la versione rara (niente lock ai rinforzi).
