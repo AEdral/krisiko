@@ -36,13 +36,16 @@ Si vince completando il **proprio obiettivo** (missione). Resta anche la vittori
 ## Delta Krisiko
 
 ### Reliquie (passive)
-1 reliquia a setup. Niente acquisizione extra in demo.
+1 reliquia a setup. Niente acquisizione extra in demo.  
+Lista completa: [CARTE-RELIQUIE-EVENTI.md](./CARTE-RELIQUIE-EVENTI.md).
 
 ### Carte (niente tris)
-Dopo almeno 1 conquista nel turno → pesca 1 carta (combat o azione). Mano max 5; se piena, scarta 1 poi pesca.
+Dopo almeno 1 conquista nel turno → pesca 1 carta (combat o azione). Mano max 5; se piena, scarta 1 poi pesca.  
+Lista completa: [CARTE-RELIQUIE-EVENTI.md](./CARTE-RELIQUIE-EVENTI.md).
 
 ### Eventi globali
-Dalla fine del round 2: 1 evento globale per round (buff/debuff a tutti).
+Dalla fine del round 2: 1 evento globale per round (buff/debuff a tutti).  
+Lista completa: [CARTE-RELIQUIE-EVENTI.md](./CARTE-RELIQUIE-EVENTI.md).
 
 ## Architettura tecnica
 Motore puro (`GameState` + azioni) separato da UI e IA, serializzabile per futuro online.
