@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  CHART_DIR: helm/krisiko
+  CHART_NAME: krisiko
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version from tag
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          IMAGE="${{ env.REGISTRY }}/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "tag=${TAG}"
+            echo "version=${VERSION}"
+            echo "image=${IMAGE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:latest
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Prepare Helm chart for release
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          IMAGE="${{ steps.meta.outputs.image }}"
+
+          sed -i "s/^version:.*/version: ${VERSION}/" "${{ env.CHART_DIR }}/Chart.yaml"
+          sed -i "s/^appVersion:.*/appVersion: \"${TAG}\"/" "${{ env.CHART_DIR }}/Chart.yaml"
+
+          sed -i "s|^  repository:.*|  repository: ${IMAGE}|" "${{ env.CHART_DIR }}/values.yaml"
+          sed -i "s|^  tag:.*|  tag: ${TAG}|" "${{ env.CHART_DIR }}/values.yaml"
+          sed -i "s|^  pullPolicy:.*|  pullPolicy: Always|" "${{ env.CHART_DIR }}/values.yaml"
+
+      - name: Lint Helm chart
+        run: helm lint "${{ env.CHART_DIR }}"
+
+      - name: Package and push Helm chart
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          IMAGE="${{ steps.meta.outputs.image }}"
+
+          helm package "${{ env.CHART_DIR }}"
+          helm push "${{ env.CHART_NAME }}-${VERSION}.tgz" "oci://${IMAGE}"
+
+      - name: Release summary
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          IMAGE="${{ steps.meta.outputs.image }}"
+
+          {
+            echo "### Release ${TAG}"
+            echo ""
+            echo "**Container image**"
+            echo '```'
+            echo "${IMAGE}:${TAG}"
+            echo '```'
+            echo ""
+            echo "**Helm chart**"
+            echo '```bash'
+            echo "helm install krisiko oci://${IMAGE}/${{ env.CHART_NAME }} --version ${VERSION}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

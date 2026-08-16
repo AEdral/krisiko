@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Krisiko</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <h1>Krisiko</h1>
+      </div>
+      <div class="top-meta" id="top-meta"></div>
+      <button type="button" id="btn-new" class="btn btn-ghost">Nuova partita</button>
+    </header>
+
+    <main class="layout">
+      <section class="map-panel">
+        <svg id="map" viewBox="172 119 745 503" preserveAspectRatio="xMidYMid meet" aria-label="Mappa Krisiko"></svg>
+        <div class="map-hint" id="map-hint">Seleziona un territorio</div>
+
+        <aside class="side-rail">
+          <div class="player-card opponent" id="opponent-panel"></div>
+          <div class="hud-block event-card" id="event-block"></div>
+          <div class="hud-actions" id="actions"></div>
+          <div class="hud-block log-card">
+            <h2>Log</h2>
+            <div id="log" class="log"></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="player-tray" id="player-tray">
+        <div class="tray-section tray-relic" id="player-relic"></div>
+        <div class="tray-section tray-mission" id="player-mission"></div>
+        <div class="tray-section tray-hand-wrap">
+          <div class="tray-label">Mano</div>
+          <div id="hand" class="hand"></div>
+        </div>
+        <div class="tray-section tray-dash" id="player-stats"></div>
+      </section>
+    </main>
+
+    <div id="dice-overlay" class="dice-overlay hidden">
+      <div class="dice-panel" id="dice-panel">
+        <div class="dice-title" id="dice-title"></div>
+        <div class="dice-rows">
+          <div class="dice-row">
+            <span class="dice-label">Attacco</span>
+            <div id="dice-att" class="dice-set"></div>
+          </div>
+          <div class="dice-row">
+            <span class="dice-label">Difesa</span>
+            <div id="dice-def" class="dice-set"></div>
+          </div>
+        </div>
+        <div class="dice-result" id="dice-result"></div>
+        <div class="dice-hint">Clic per chiudere</div>
+      </div>
+    </div>
+
+    <div id="fortify-modal" class="overlay hidden">
+      <div class="modal fortify-modal">
+        <h2 id="move-modal-title">Spostamento</h2>
+        <p id="fortify-text"></p>
+        <label class="fortify-label">
+          <span id="move-modal-label">Armate da spostare</span>
+          <input type="range" id="fortify-range" min="1" max="1" value="1" />
+        </label>
+        <div class="fortify-value"><span id="fortify-count">1</span></div>
+        <div class="fortify-actions">
+          <button type="button" id="fortify-cancel" class="btn btn-ghost">Annulla</button>
+          <button type="button" id="fortify-confirm" class="btn">Conferma</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="overlay" class="overlay hidden">
+      <div class="modal">
+        <h2 id="overlay-title"></h2>
+        <p id="overlay-body"></p>
+        <button type="button" id="btn-overlay-new" class="btn">Nuova partita</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

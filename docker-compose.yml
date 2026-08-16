@@ -1,0 +1,7 @@
+services:
+  krisiko:
+    build: .
+    container_name: krisiko
+    ports:
+      - "3080:80"
+    restart: unless-stopped
