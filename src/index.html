@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Krisiko</title>
   <link rel="stylesheet" href="css/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -23,27 +23,51 @@
       <section class="map-panel">
         <svg id="map" viewBox="172 119 745 503" preserveAspectRatio="xMidYMid meet" aria-label="Mappa Krisiko"></svg>
         <div class="map-hint" id="map-hint">Seleziona un territorio</div>
+      </section>
 
+      <div class="hud-stack">
         <aside class="side-rail">
-          <div class="player-card opponent" id="opponent-panel"></div>
-          <div class="hud-block event-card" id="event-block"></div>
           <div class="hud-actions" id="actions"></div>
-          <div class="hud-block log-card">
-            <h2>Log</h2>
-            <div id="log" class="log"></div>
+          <div class="hud-fold">
+            <button type="button" class="hud-fold-toggle" aria-expanded="false">Avversario</button>
+            <div class="hud-fold-body">
+              <div class="player-card opponent" id="opponent-panel"></div>
+            </div>
+          </div>
+          <div class="hud-fold">
+            <button type="button" class="hud-fold-toggle" aria-expanded="false">Evento</button>
+            <div class="hud-block event-card hud-fold-body" id="event-block"></div>
+          </div>
+          <div class="hud-fold">
+            <button type="button" class="hud-fold-toggle" aria-expanded="false">Log</button>
+            <div class="hud-fold-body">
+              <div class="hud-block log-card">
+                <h2>Log</h2>
+                <div id="log" class="log"></div>
+              </div>
+            </div>
           </div>
         </aside>
-      </section>
 
-      <section class="player-tray" id="player-tray">
-        <div class="tray-section tray-relic" id="player-relic"></div>
-        <div class="tray-section tray-mission" id="player-mission"></div>
-        <div class="tray-section tray-hand-wrap">
-          <div class="tray-label">Mano</div>
-          <div id="hand" class="hand"></div>
-        </div>
-        <div class="tray-section tray-dash" id="player-stats"></div>
-      </section>
+        <section class="player-tray" id="player-tray">
+          <div class="hud-fold tray-section tray-relic">
+            <button type="button" class="hud-fold-toggle" aria-expanded="false">Reliquia</button>
+            <div class="hud-fold-body" id="player-relic"></div>
+          </div>
+          <div class="hud-fold tray-section tray-mission">
+            <button type="button" class="hud-fold-toggle" aria-expanded="false">Obiettivo</button>
+            <div class="hud-fold-body tray-mission-inner" id="player-mission"></div>
+          </div>
+          <div class="tray-section tray-hand-wrap">
+            <div class="tray-label">Mano</div>
+            <div id="hand" class="hand"></div>
+          </div>
+          <div class="hud-fold tray-section tray-dash">
+            <button type="button" class="hud-fold-toggle" aria-expanded="false">Tu</button>
+            <div class="hud-fold-body" id="player-stats"></div>
+          </div>
+        </section>
+      </div>
     </main>
 
     <div id="dice-overlay" class="dice-overlay hidden">

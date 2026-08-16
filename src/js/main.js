@@ -485,4 +485,15 @@ els.opponentPanel.addEventListener('click', () => {
   refresh();
 });
 
+document.querySelector('.hud-stack')?.addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.hud-fold-toggle');
+  if (!btn) return;
+  ev.preventDefault();
+  const fold = btn.closest('.hud-fold');
+  if (!fold) return;
+  const open = !fold.classList.contains('is-open');
+  fold.classList.toggle('is-open', open);
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+
 newGame();
