@@ -2,9 +2,9 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import { WebSocketServer } from 'ws';
-import { createRoom, joinRoom, startRoom, handleAction, disconnect, sanitizeName } from './rooms.js';
+import { handleNetMessage, parseNetPayload } from '../src/js/net/protocol.js';
+import { disconnect } from '../src/js/net/rooms.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -82,63 +82,12 @@ wss.on('connection', (ws) => {
   ws.roomId = null;
 
   ws.on('message', (raw) => {
-    let msg;
-    try {
-      msg = JSON.parse(String(raw));
-    } catch {
+    const msg = parseNetPayload(raw);
+    if (!msg) {
       send(ws, { type: 'error', message: 'Messaggio non valido.' });
       return;
     }
-    if (!msg || typeof msg.type !== 'string') return;
-
-    if (msg.type === 'hello') {
-      ws.clientId = typeof msg.clientId === 'string' && msg.clientId.length < 80 ? msg.clientId : randomUUID();
-      send(ws, { type: 'hello_ok', clientId: ws.clientId });
-      return;
-    }
-
-    if (!ws.clientId) {
-      send(ws, { type: 'error', message: 'Invia hello prima.' });
-      return;
-    }
-
-    if (msg.type === 'create') {
-      const result = createRoom({
-        hostClientId: ws.clientId,
-        hostName: sanitizeName(msg.name),
-        extraHumans: msg.extraHumans,
-        aiCount: msg.aiCount,
-        ws,
-      });
-      if (result.error) send(ws, { type: 'error', message: result.error });
-      else send(ws, { type: 'room', room: result.room });
-      return;
-    }
-
-    if (msg.type === 'join') {
-      const roomId = String(msg.roomId || '').toLowerCase();
-      const result = joinRoom({
-        roomId,
-        clientId: ws.clientId,
-        name: sanitizeName(msg.name),
-        ws,
-      });
-      if (result.error) send(ws, { type: 'error', message: result.error });
-      else send(ws, { type: 'room', room: result.room });
-      return;
-    }
-
-    if (msg.type === 'start') {
-      const result = startRoom(ws.roomId, ws.clientId);
-      if (result.error) send(ws, { type: 'error', message: result.error });
-      return;
-    }
-
-    if (msg.type === 'action') {
-      const result = handleAction(ws.roomId, ws.clientId, msg.action);
-      if (result.error) send(ws, { type: 'error', message: result.error });
-      return;
-    }
+    handleNetMessage(ws, msg, send);
   });
 
   ws.on('close', () => disconnect(ws));

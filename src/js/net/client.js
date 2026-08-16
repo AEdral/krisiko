@@ -1,6 +1,23 @@
+import { openP2pHost, openP2pGuest } from './p2p.js';
+
 function wsUrl() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
+}
+
+function isStaticPagesHost() {
+  return /\.github\.io$/i.test(location.hostname);
+}
+
+export function describeNetError(err) {
+  const m = String(err?.type || err?.message || err || '');
+  if (/host-offline|peer-unavailable|unavailable/i.test(m)) {
+    return 'L’host non è raggiungibile. Deve tenere aperta la pagina della stanza.';
+  }
+  if (/peerjs|peer-timeout|network|server-error/i.test(m)) {
+    return 'Collegamento peer non disponibile. Controlla la rete e riprova.';
+  }
+  return 'Impossibile aprire la stanza online. Riprova.';
 }
 
 function newId() {
@@ -29,13 +46,36 @@ export function createNet(handlers = {}) {
   let ws = null;
   let clientId = loadClientId();
   let opened = false;
+  let mode = null; // 'ws' | 'p2p'
+  let p2p = null;
   const queue = [];
 
   function emit(type, payload) {
     handlers[type]?.(payload);
   }
 
+  function onUiMessage(msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'hello_ok') {
+      clientId = msg.clientId;
+      try {
+        sessionStorage.setItem('krisiko.clientId', clientId);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    if (msg.type === 'error') emit('error', msg.message);
+    else if (msg.type === 'room') emit('room', msg.room);
+    else if (msg.type === 'state') emit('state', msg);
+  }
+
   function send(msg) {
+    if (mode === 'p2p' && p2p) {
+      if (p2p.sendToEngine) p2p.sendToEngine(msg);
+      else p2p.send?.(msg);
+      return;
+    }
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(msg));
     } else {
@@ -43,10 +83,7 @@ export function createNet(handlers = {}) {
     }
   }
 
-  function connect() {
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-      return Promise.resolve();
-    }
+  function connectWs() {
     return new Promise((resolve, reject) => {
       let settled = false;
       try {
@@ -65,10 +102,10 @@ export function createNet(handlers = {}) {
             /* ignore */
           }
         }
-      }, 4000);
+      }, 1500);
       ws.onopen = () => {
         opened = true;
-        send({ type: 'hello', clientId });
+        ws.send(JSON.stringify({ type: 'hello', clientId }));
       };
       ws.onmessage = (ev) => {
         let msg;
@@ -95,9 +132,7 @@ export function createNet(handlers = {}) {
           }
           return;
         }
-        if (msg.type === 'error') emit('error', msg.message);
-        else if (msg.type === 'room') emit('room', msg.room);
-        else if (msg.type === 'state') emit('state', msg);
+        onUiMessage(msg);
       };
       ws.onerror = () => {
         if (!settled) {
@@ -105,7 +140,6 @@ export function createNet(handlers = {}) {
           clearTimeout(timer);
           reject(new Error('ws'));
         }
-        emit('error', 'Server online non raggiungibile. Avvia Krisiko con npm start (non Pages).');
       };
       ws.onclose = () => {
         opened = false;
@@ -118,18 +152,60 @@ export function createNet(handlers = {}) {
     });
   }
 
+  async function connect() {
+    if (mode === 'ws' && ws?.readyState === WebSocket.OPEN) return;
+    if (mode === 'p2p') return;
+    if (!isStaticPagesHost()) {
+      try {
+        await connectWs();
+        mode = 'ws';
+        return;
+      } catch {
+        try {
+          ws?.close();
+        } catch {
+          /* ignore */
+        }
+        ws = null;
+      }
+    }
+    mode = 'p2p';
+    opened = true;
+  }
+
   return {
     get clientId() {
       return clientId;
     },
     get connected() {
-      return opened && ws?.readyState === WebSocket.OPEN;
+      return opened;
+    },
+    get mode() {
+      return mode;
     },
     connect,
-    create({ name, extraHumans, aiCount }) {
+    async create({ name, extraHumans, aiCount }) {
+      if (mode === 'p2p') {
+        p2p = await openP2pHost({ clientId, onMessage: onUiMessage });
+        p2p.sendToEngine({ type: 'hello', clientId });
+        p2p.sendToEngine({
+          type: 'create',
+          name,
+          extraHumans,
+          aiCount,
+          roomId: p2p.roomId,
+        });
+        return;
+      }
       send({ type: 'create', name, extraHumans, aiCount });
     },
-    join({ roomId, name }) {
+    async join({ roomId, name }) {
+      if (mode === 'p2p') {
+        p2p = await openP2pGuest({ roomId, onMessage: onUiMessage });
+        p2p.send({ type: 'hello', clientId });
+        p2p.send({ type: 'join', roomId, name });
+        return;
+      }
       send({ type: 'join', roomId, name });
     },
     start() {
@@ -144,8 +220,15 @@ export function createNet(handlers = {}) {
       } catch {
         /* ignore */
       }
+      try {
+        p2p?.close?.();
+      } catch {
+        /* ignore */
+      }
       ws = null;
+      p2p = null;
       opened = false;
+      mode = null;
     },
   };
 }

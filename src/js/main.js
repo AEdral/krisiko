@@ -3,7 +3,7 @@ import { runAiTurn } from './ai/ai.js';
 import { renderMap, computeHighlights } from './ui/map.js';
 import { renderHud, renderActions } from './ui/hud.js';
 import { showBattleDice } from './ui/dice.js';
-import { createNet } from './net/client.js';
+import { createNet, describeNetError } from './net/client.js';
 
 const els = {
   map: document.getElementById('map'),
@@ -183,10 +183,12 @@ function renderWaitRoom(room) {
     .join('');
   const humansIn = room.seats.filter((s) => s.kind === 'human' && s.connected).length;
   const open = room.seats.filter((s) => s.kind === 'human' && !s.taken).length;
+  const hostKeepOpen =
+    net.mode === 'p2p' && room.you.isHost ? ' Tieni aperta questa scheda: sei il server della stanza.' : '';
   els.lobbyWaitHint.textContent = room.you.isHost
     ? open
-      ? `In attesa di ${open} giocator${open === 1 ? 'e' : 'i'}. I posti vuoti diventano IA se inizi.`
-      : 'Tutti i posti umani sono pieni.'
+      ? `In attesa di ${open} giocator${open === 1 ? 'e' : 'i'}. I posti vuoti diventano IA se inizi.${hostKeepOpen}`
+      : `Tutti i posti umani sono pieni.${hostKeepOpen}`
     : 'In attesa che l’host inizi la partita…';
   const canStart = room.you.isHost && humansIn >= 1 && (humansIn >= 2 || room.seats.length >= 2);
   els.lobbyBegin.classList.toggle('hidden', !canStart);
@@ -374,8 +376,8 @@ async function ensureNet() {
   try {
     await net.connect();
     return true;
-  } catch {
-    showLobbyError('Server online non raggiungibile. Usa npm start o Docker, non GitHub Pages.');
+  } catch (err) {
+    showLobbyError(describeNetError(err));
     return false;
   }
 }
@@ -384,7 +386,16 @@ async function createOnlineRoom() {
   persistLobby();
   showLobbyError('');
   if (!(await ensureNet())) return;
-  net.create({ name: playerName(), extraHumans, aiCount });
+  els.lobbyStart.classList.add('hidden');
+  els.lobbyWait.classList.remove('hidden');
+  els.lobbyWaitHint.textContent = 'Apertura stanza…';
+  try {
+    await net.create({ name: playerName(), extraHumans, aiCount });
+  } catch (err) {
+    els.lobbyStart.classList.remove('hidden');
+    els.lobbyWait.classList.add('hidden');
+    showLobbyError(describeNetError(err));
+  }
 }
 
 async function confirmJoin() {
@@ -407,7 +418,14 @@ async function confirmJoin() {
     els.lobbyJoinLead?.classList.remove('hidden');
     return;
   }
-  net.join({ roomId: joinPendingId, name });
+  try {
+    await net.join({ roomId: joinPendingId, name });
+  } catch (err) {
+    els.lobbyStart.classList.remove('hidden');
+    els.lobbyWait.classList.add('hidden');
+    els.lobbyJoinLead?.classList.remove('hidden');
+    showLobbyError(describeNetError(err));
+  }
 }
 
 async function joinOnlineRoom(roomId) {

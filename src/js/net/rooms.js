@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import {
   createGame,
   applyAction,
@@ -6,8 +5,8 @@ import {
   PLAYER_SLOTS,
   MAX_PLAYERS,
   MIN_PLAYERS,
-} from '../src/js/engine/game.js';
-import { runAiTurn } from '../src/js/ai/ai.js';
+} from '../engine/game.js';
+import { runAiTurn } from '../ai/ai.js';
 
 const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const EMPTY_TTL_MS = 15 * 60 * 1000;
@@ -20,8 +19,13 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function newRoomId() {
-  return randomBytes(4).toString('hex');
+export function newRoomId() {
+  const bytes = new Uint8Array(4);
+  (globalThis.crypto || {}).getRandomValues?.(bytes);
+  if (!bytes[0] && !bytes[1]) {
+    return Math.random().toString(16).slice(2, 10).padEnd(8, '0');
+  }
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export function sanitizeName(raw) {
@@ -75,8 +79,7 @@ function send(ws, msg) {
 
 function broadcastRoom(room) {
   for (const ws of room.sockets) {
-    const clientId = ws.clientId;
-    send(ws, { type: 'room', room: publicRoom(room, clientId) });
+    send(ws, { type: 'room', room: publicRoom(room, ws.clientId) });
   }
 }
 
@@ -93,11 +96,7 @@ function broadcastState(room) {
   }
 }
 
-export function getRoom(id) {
-  return rooms.get(id) || null;
-}
-
-export function createRoom({ hostClientId, hostName, extraHumans, aiCount, ws }) {
+export function createRoom({ hostClientId, hostName, extraHumans, aiCount, ws, id: forcedId }) {
   sweep();
   if (rooms.size >= MAX_ROOMS) {
     return { error: 'Troppe stanze attive, riprova tra poco.' };
@@ -107,7 +106,7 @@ export function createRoom({ hostClientId, hostName, extraHumans, aiCount, ws })
   const ai = counts.aiCount;
   const humanSeats = 1 + extra;
   const total = humanSeats + ai;
-  const id = newRoomId();
+  const id = (forcedId || newRoomId()).toLowerCase();
   const seats = [];
   for (let i = 0; i < total; i++) {
     const slot = PLAYER_SLOTS[i];
@@ -144,8 +143,8 @@ export function createRoom({ hostClientId, hostName, extraHumans, aiCount, ws })
 }
 
 export function joinRoom({ roomId, clientId, name, ws }) {
-  const room = rooms.get(roomId);
-  if (!room) return { error: 'Stanza non trovata. Il link è sbagliato o è scaduta.' };
+  const room = rooms.get(String(roomId || '').toLowerCase());
+  if (!room) return { error: 'Stanza non trovata. Il link è sbagliato o l’host ha chiuso la pagina.' };
   room.lastActive = Date.now();
 
   const existing = room.seats.find((s) => s.kind === 'human' && s.clientId === clientId);
@@ -284,4 +283,5 @@ function sweep() {
   }
 }
 
-setInterval(sweep, 60_000).unref?.();
+const sweepTimer = setInterval(sweep, 60_000);
+sweepTimer.unref?.();

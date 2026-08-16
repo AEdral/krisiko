@@ -196,7 +196,7 @@ Solo se il prodotto richiede partite online. Altrimenti resta nginx + `src/` com
 - `server/` è un processo Node che **serve `src/`** come statico, espone `GET /health` e WebSocket `/ws`.
 - Stanze **in memoria**, accessibili solo via link. Niente account, classifiche o database.
 - Helm: `replicaCount: 1` (altrimenti le stanze non si vedono tra pod). Probe su `/health`. Timeout ingress lunghi per il WS.
-- GitHub Pages continua a pubblicare **solo** `src/` (senza online).
+- GitHub Pages pubblica solo `src/`; le stanze online lì usano un collegamento peer (host = tab aperta), non WebSocket.
 - `npm start` → `node server/index.js`. Dipendenza: `ws`.
 - Dockerfile: `node:*-alpine`, `npm ci --omit=dev`, `CMD ["node", "server/index.js"]`, `PORT=80`.
 

@@ -30,9 +30,9 @@ Senza Docker (serve anche il multiplayer online):
 npm start
 ```
 
-http://localhost:3000 — lobby **Online** → crea una stanza → copia il link. Gli amici aprono il link; i posti vuoti diventano IA se inizi prima. Niente account: le stanze vivono in memoria sul server.
+http://localhost:3000 — lobby **Online** → crea una stanza → copia il link. Gli amici aprono il link; i posti vuoti diventano IA se inizi prima. Niente account.
 
-GitHub Pages resta **solo locale** (niente WebSocket).
+Su **GitHub Pages** le stanze online usano un collegamento peer (chi crea la stanza deve tenere aperta la scheda). Con `npm start` o Docker le stanze vivono sul server.
 
 Solo statico, senza stanze:
 
@@ -80,7 +80,7 @@ src/                 runtime frontend (HTML/CSS/JS, path relativi)
   js/engine/         regole, stato serializzabile
   js/ai/             IA euristica
   js/ui/             mappa, HUD, dadi
-  js/net/            client WebSocket stanze
+  js/net/            client: WebSocket oppure peer (Pages)
   js/data/           territori, carte, reliquie, eventi, missioni
 server/              Node: statico + WebSocket stanze (in memoria)
 helm/krisiko/        chart Kubernetes
@@ -90,7 +90,7 @@ Dockerfile           Node serve src/ + /ws
 docker-compose.yml   host 3080 → container 80
 ```
 
-`src/` è il frontend. Docker/Compose/Helm usano anche `server/` per le stanze online. Pages pubblica solo `src/` (partite locali).
+`src/` è il frontend. Docker/Compose/Helm usano anche `server/` per le stanze online. Su Pages le stanze online partono dal browser di chi crea il link (tab aperta).
 
 ## Prodotto
 
