@@ -99,6 +99,7 @@ export function getContinentStatus(state, playerId) {
 }
 
 export function playerHasRelic(state, playerId, effectType) {
+  if (state.vanillaMode) return false;
   const relicId = state.players[playerId].relicId;
   return relicId && RELICS[relicId]?.effect?.type === effectType;
 }
@@ -109,7 +110,8 @@ export function getRelicEffect(state, playerId) {
 }
 
 export function getActiveEvent(state) {
-  return state.activeEventId ? EVENTS[state.activeEventId] : null;
+  if (state.vanillaMode || !state.activeEventId) return null;
+  return EVENTS[state.activeEventId] ?? null;
 }
 
 export function isImmuneToHarm(state, playerId) {
@@ -205,6 +207,7 @@ function maxDefendDice(state, armies) {
 }
 
 function drawCard(state, playerId) {
+  if (state.vanillaMode) return null;
   const p = state.players[playerId];
   if (state.cardDeck.length === 0) {
     if (state.cardDiscard.length === 0) return null;
@@ -248,9 +251,19 @@ function beginPlayerTurn(state) {
   ensureStartTurnEffects(state);
   const p = state.players[state.currentPlayerId];
   log(state, `${p.name} — rinforzi: ${state.reinforcementsRemaining}.`);
+  if (state.drawEveryTurn) {
+    const result = drawCard(state, state.currentPlayerId);
+    if (result?.needsDiscard) {
+      state.pendingDrawAfterDiscard = true;
+      log(state, 'Mano piena: scarta 1 carta per pescare.');
+    } else if (result?.cardId) {
+      log(state, `Pesci ${CARDS[result.cardId].name}.`);
+    }
+  }
 }
 
 function revealEvent(state) {
+  if (state.vanillaMode) return;
   if (state.eventDeck.length === 0) {
     state.eventDeck = createEventDeck(state.rng);
   }
@@ -284,9 +297,11 @@ function checkVictory(state) {
 
 /**
  * Create initial game state.
- * @param {{ seed?: number, humanId?: string, playerCount?: number, aiCount?: number, seats?: { id?: string, name?: string, isHuman?: boolean }[] }} opts
+ * @param {{ seed?: number, humanId?: string, playerCount?: number, aiCount?: number, vanillaMode?: boolean, drawEveryTurn?: boolean, seats?: { id?: string, name?: string, isHuman?: boolean }[] }} opts
  */
 export function createGame(opts = {}) {
+  const vanillaMode = !!opts.vanillaMode;
+  const drawEveryTurn = !vanillaMode && !!opts.drawEveryTurn;
   const rng = createRng(opts.seed ?? Date.now());
   const humanId = opts.humanId ?? 'P1';
   const seatSpecs = Array.isArray(opts.seats) && opts.seats.length ? opts.seats : null;
@@ -322,7 +337,7 @@ export function createGame(opts = {}) {
   const othersOf = (pid) => playerOrder.filter((id) => id !== pid);
 
   playerOrder.forEach((pid, i) => {
-    players[pid].relicId = relicPool[i];
+    if (!vanillaMode) players[pid].relicId = relicPool[i];
     players[pid].missionId = missionPool[i];
     if (players[pid].missionId === 'eliminate_enemy') {
       const others = othersOf(pid);
@@ -364,20 +379,30 @@ export function createGame(opts = {}) {
     mustAttackSatisfied: false,
     pendingCombatCard: null,
     pendingInvasion: null,
-    cardDeck: createCardDeck(rng),
+    vanillaMode,
+    drawEveryTurn,
+    cardDeck: vanillaMode ? [] : createCardDeck(rng),
     cardDiscard: [],
-    eventDeck: createEventDeck(rng),
+    eventDeck: vanillaMode ? [] : createEventDeck(rng),
     activeEventId: null,
     winnerId: null,
     lastBattle: null,
     log: [],
   };
 
-  log(state, `Partita iniziata (${playerCount} giocatori, seed ${state.seed}).`);
+  const modeBits = [
+    vanillaMode ? 'Vanilla' : 'Krisiko',
+    drawEveryTurn ? 'pesca ogni turno' : null,
+  ].filter(Boolean);
+  log(state, `Partita iniziata (${playerCount} giocatori, seed ${state.seed}${modeBits.length ? ` · ${modeBits.join(' · ')}` : ''}).`);
   log(state, `Schieramento: 1 armata per territorio; ${startArmies} armate a testa, il resto a turni.`);
   for (const pid of playerOrder) {
     const p = players[pid];
-    log(state, `${p.name} reliquia: ${RELICS[p.relicId].name}. Obiettivo segreto assegnato.`);
+    if (!vanillaMode && p.relicId) {
+      log(state, `${p.name} reliquia: ${RELICS[p.relicId].name}. Obiettivo segreto assegnato.`);
+    } else {
+      log(state, `${p.name} obiettivo segreto assegnato.`);
+    }
   }
   log(
     state,
@@ -477,6 +502,7 @@ export function getLegalActions(state) {
   }
 
   // Action cards
+  if (state.vanillaMode) return actions;
   for (let i = 0; i < state.players[pid].hand.length; i++) {
     const cardId = state.players[pid].hand[i];
     const card = CARDS[cardId];
@@ -609,7 +635,7 @@ function endPhase(state) {
       }
     }
 
-    if (state.conqueredThisTurn) {
+    if (state.conqueredThisTurn && !state.drawEveryTurn) {
       const result = drawCard(state, pid);
       if (result?.needsDiscard) {
         state.pendingDrawAfterDiscard = true;

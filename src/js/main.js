@@ -6,6 +6,45 @@ import { showBattleDice } from './ui/dice.js';
 import { createNet, describeNetError } from './net/client.js';
 
 const els = {
+  app: document.getElementById('app'),
+  gameShell: document.getElementById('game-shell'),
+  screenHome: document.getElementById('screen-home'),
+  screenSetup: document.getElementById('screen-setup'),
+  screenJoin: document.getElementById('screen-join'),
+  screenWait: document.getElementById('screen-wait'),
+  homeNew: document.getElementById('home-new'),
+  setupLogo: document.getElementById('setup-logo'),
+  setupName: document.getElementById('setup-name'),
+  setupModeLocal: document.getElementById('setup-mode-local'),
+  setupModeOnline: document.getElementById('setup-mode-online'),
+  setupModeHelp: document.getElementById('setup-mode-help'),
+  setupPlayersHelp: document.getElementById('setup-players-help'),
+  setupAiCount: document.getElementById('setup-ai-count'),
+  setupSlots: document.getElementById('setup-slots'),
+  setupTotal: document.getElementById('setup-total'),
+  setupFriendsWrap: document.getElementById('setup-friends-wrap'),
+  setupFriendsCount: document.getElementById('setup-friends-count'),
+  setupDraw: document.getElementById('setup-draw'),
+  setupVanilla: document.getElementById('setup-vanilla'),
+  setupError: document.getElementById('setup-error'),
+  setupBack: document.getElementById('setup-back'),
+  setupStart: document.getElementById('setup-start'),
+  setupMinus: document.getElementById('setup-ai-minus'),
+  setupPlus: document.getElementById('setup-ai-plus'),
+  setupFriendsMinus: document.getElementById('setup-friends-minus'),
+  setupFriendsPlus: document.getElementById('setup-friends-plus'),
+  joinName: document.getElementById('join-name'),
+  joinError: document.getElementById('join-error'),
+  joinBack: document.getElementById('join-back'),
+  joinConfirm: document.getElementById('join-confirm'),
+  waitRules: document.getElementById('wait-rules'),
+  waitLink: document.getElementById('wait-link'),
+  waitCopy: document.getElementById('wait-copy'),
+  waitSeats: document.getElementById('wait-seats'),
+  waitHint: document.getElementById('wait-hint'),
+  waitError: document.getElementById('wait-error'),
+  waitBack: document.getElementById('wait-back'),
+  waitBegin: document.getElementById('wait-begin'),
   map: document.getElementById('map'),
   mapHint: document.getElementById('map-hint'),
   topMeta: document.getElementById('top-meta'),
@@ -21,34 +60,6 @@ const els = {
   overlay: document.getElementById('overlay'),
   overlayTitle: document.getElementById('overlay-title'),
   overlayBody: document.getElementById('overlay-body'),
-  lobby: document.getElementById('lobby'),
-  lobbyAiCount: document.getElementById('lobby-ai-count'),
-  lobbyAiLabel: document.getElementById('lobby-ai-label'),
-  lobbySlots: document.getElementById('lobby-slots'),
-  lobbyTotal: document.getElementById('lobby-total'),
-  lobbyCancel: document.getElementById('lobby-cancel'),
-  lobbyStart: document.getElementById('lobby-start'),
-  lobbyMinus: document.getElementById('lobby-ai-minus'),
-  lobbyPlus: document.getElementById('lobby-ai-plus'),
-  lobbyModeLocal: document.getElementById('lobby-mode-local'),
-  lobbyModeOnline: document.getElementById('lobby-mode-online'),
-  lobbyModes: document.getElementById('lobby-modes'),
-  lobbyTitle: document.getElementById('lobby-title'),
-  lobbyJoinLead: document.getElementById('lobby-join-lead'),
-  lobbyName: document.getElementById('lobby-name'),
-  lobbyLead: document.getElementById('lobby-lead'),
-  lobbySetup: document.getElementById('lobby-setup'),
-  lobbyFriendsWrap: document.getElementById('lobby-friends-wrap'),
-  lobbyFriendsCount: document.getElementById('lobby-friends-count'),
-  lobbyFriendsMinus: document.getElementById('lobby-friends-minus'),
-  lobbyFriendsPlus: document.getElementById('lobby-friends-plus'),
-  lobbyError: document.getElementById('lobby-error'),
-  lobbyWait: document.getElementById('lobby-wait'),
-  lobbyLink: document.getElementById('lobby-link'),
-  lobbyCopy: document.getElementById('lobby-copy'),
-  lobbyWaitSeats: document.getElementById('lobby-wait-seats'),
-  lobbyWaitHint: document.getElementById('lobby-wait-hint'),
-  lobbyBegin: document.getElementById('lobby-begin'),
   diceOverlay: document.getElementById('dice-overlay'),
   diceTitle: document.getElementById('dice-title'),
   diceAtt: document.getElementById('dice-att'),
@@ -87,10 +98,15 @@ const ui = {
 const AI_COUNT_KEY = 'krisiko.aiCount';
 const FRIENDS_KEY = 'krisiko.extraHumans';
 const NAME_KEY = 'krisiko.playerName';
+const MODE_KEY = 'krisiko.lobbyMode';
+const VANILLA_KEY = 'krisiko.vanillaMode';
+const DRAW_KEY = 'krisiko.drawEveryTurn';
 const MAX_AI = MAX_PLAYERS - 1;
 let aiCount = loadAiCount();
 let extraHumans = loadExtraHumans();
-let lobbyMode = 'local';
+let lobbyMode = loadLobbyMode();
+let vanillaMode = loadVanillaMode();
+let drawEveryTurn = loadDrawEveryTurn();
 let onlineRoom = null;
 let netWait = false;
 let joiningRoomId = null;
@@ -104,6 +120,34 @@ function loadNum(key, fallback, min, max) {
   } catch {
     return fallback;
   }
+}
+
+function loadBool(key, fallback = false) {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function loadLobbyMode() {
+  try {
+    const m = localStorage.getItem(MODE_KEY);
+    return m === 'online' ? 'online' : 'local';
+  } catch {
+    return 'local';
+  }
+}
+
+function loadVanillaMode() {
+  return loadBool(VANILLA_KEY, false);
+}
+
+function loadDrawEveryTurn() {
+  return loadBool(DRAW_KEY, false);
 }
 
 function loadAiCount() {
@@ -126,15 +170,83 @@ function persistLobby() {
   try {
     localStorage.setItem(AI_COUNT_KEY, String(aiCount));
     localStorage.setItem(FRIENDS_KEY, String(extraHumans));
-    if (els.lobbyName?.value) localStorage.setItem(NAME_KEY, els.lobbyName.value.slice(0, 20));
+    localStorage.setItem(MODE_KEY, lobbyMode);
+    localStorage.setItem(VANILLA_KEY, String(vanillaMode));
+    localStorage.setItem(DRAW_KEY, String(drawEveryTurn));
+    const name = (els.setupName?.value || els.joinName?.value || '').trim();
+    if (name) localStorage.setItem(NAME_KEY, name.slice(0, 20));
   } catch {
     /* ignore */
   }
 }
 
-function playerName() {
-  const n = (els.lobbyName?.value || '').trim();
+function playerName(fromJoin = false) {
+  const el = fromJoin ? els.joinName : els.setupName;
+  const n = (el?.value || '').trim();
   return n || 'Giocatore';
+}
+
+function rulesSummary({ vanilla, draw }) {
+  const bits = [vanilla ? 'Vanilla' : 'Krisiko'];
+  if (!vanilla && draw) bits.push('pesca ogni turno');
+  return bits.map((b) => `<span class="pill">${b}</span>`).join('');
+}
+
+function showFlowScreen(name) {
+  const map = {
+    home: els.screenHome,
+    setup: els.screenSetup,
+    join: els.screenJoin,
+    wait: els.screenWait,
+  };
+  for (const [key, el] of Object.entries(map)) {
+    el?.classList.toggle('hidden', key !== name);
+  }
+  els.gameShell?.classList.toggle('hidden', name !== 'game');
+}
+
+function showHome() {
+  showFlowScreen('home');
+  clearFlowErrors();
+}
+
+function showSetup() {
+  if (els.setupName && !els.setupName.value) els.setupName.value = loadName();
+  renderSetup();
+  showFlowScreen('setup');
+  clearFlowErrors();
+}
+
+function showJoinScreen() {
+  if (els.joinName) els.joinName.value = '';
+  showFlowScreen('join');
+  clearFlowErrors();
+  els.joinName?.focus();
+}
+
+function showWaitScreen() {
+  showFlowScreen('wait');
+  clearFlowErrors();
+}
+
+function enterGame() {
+  showFlowScreen('game');
+  clearFlowErrors();
+  els.app?.classList.toggle('vanilla-mode', !!state?.vanillaMode);
+}
+
+function clearFlowErrors() {
+  showFlowError('setup', '');
+  showFlowError('join', '');
+  showFlowError('wait', '');
+}
+
+function showFlowError(which, msg) {
+  const el =
+    which === 'setup' ? els.setupError : which === 'join' ? els.joinError : els.waitError;
+  if (!el) return;
+  el.textContent = msg || '';
+  el.classList.toggle('hidden', !msg);
 }
 
 function roomUrl(id) {
@@ -142,39 +254,32 @@ function roomUrl(id) {
   return `${location.origin}${path}?room=${encodeURIComponent(id)}`;
 }
 
-function showLobbyError(msg) {
-  if (!els.lobbyError) return;
-  els.lobbyError.textContent = msg || '';
-  els.lobbyError.classList.toggle('hidden', !msg);
+function syncRuleToggles() {
+  if (els.setupDraw) {
+    els.setupDraw.disabled = vanillaMode;
+    els.setupDraw.setAttribute('aria-pressed', drawEveryTurn ? 'true' : 'false');
+    els.setupDraw.textContent = drawEveryTurn ? 'On' : 'Off';
+  }
+  if (els.setupVanilla) {
+    els.setupVanilla.setAttribute('aria-pressed', vanillaMode ? 'true' : 'false');
+    els.setupVanilla.textContent = vanillaMode ? 'On' : 'Off';
+  }
+  if (els.setupLogo) {
+    els.setupLogo.src = vanillaMode ? 'assets/logo-vanilla-wordmark.png' : 'assets/logo-wordmark.png';
+  }
 }
 
-function clampOnlineCounts() {
-  extraHumans = Math.max(1, Math.min(MAX_PLAYERS - 1, extraHumans));
-  const maxAi = MAX_PLAYERS - 1 - extraHumans;
-  if (aiCount > maxAi) aiCount = maxAi;
-  if (aiCount < 0) aiCount = 0;
-}
-
-function renderWaitRoom(room) {
+function renderWait(room) {
   onlineRoom = room;
-  const joining = !!joinPendingId && !room;
-  const waiting = lobbyMode === 'online' && room && room.status === 'lobby';
-  els.lobbyWait.classList.toggle('hidden', !waiting);
-  els.lobbySetup.classList.toggle('hidden', waiting || joining);
-  els.lobbyStart.classList.toggle('hidden', waiting);
-  els.lobbyModes?.classList.toggle('hidden', joining || waiting);
-  els.lobbyJoinLead?.classList.toggle('hidden', !joining);
-  if (els.lobbyTitle) {
-    els.lobbyTitle.textContent = joining ? 'Entra nella stanza' : waiting ? 'Stanza' : 'Nuova partita';
-  }
-  if (!waiting) {
-    els.lobbyBegin.classList.add('hidden');
-    return;
-  }
+  if (!room) return;
   const link = roomUrl(room.id);
-  els.lobbyLink.value = link;
+  els.waitLink.value = link;
   history.replaceState(null, '', `?room=${encodeURIComponent(room.id)}`);
-  els.lobbyWaitSeats.innerHTML = room.seats
+  els.waitRules.innerHTML = rulesSummary({
+    vanilla: room.vanillaMode,
+    draw: room.drawEveryTurn,
+  });
+  els.waitSeats.innerHTML = room.seats
     .map((s) => {
       const status =
         s.kind === 'ai' ? 'IA' : s.connected ? s.name : s.taken ? `${s.name} (offline)` : 'libero';
@@ -185,44 +290,47 @@ function renderWaitRoom(room) {
   const open = room.seats.filter((s) => s.kind === 'human' && !s.taken).length;
   const hostKeepOpen =
     net.mode === 'p2p' && room.you.isHost ? ' Tieni aperta questa scheda: sei il server della stanza.' : '';
-  els.lobbyWaitHint.textContent = room.you.isHost
+  els.waitHint.textContent = room.you.isHost
     ? open
       ? `In attesa di ${open} giocator${open === 1 ? 'e' : 'i'}. I posti vuoti diventano IA se inizi.${hostKeepOpen}`
       : `Tutti i posti umani sono pieni.${hostKeepOpen}`
     : 'In attesa che l’host inizi la partita…';
   const canStart = room.you.isHost && humansIn >= 1 && (humansIn >= 2 || room.seats.length >= 2);
-  els.lobbyBegin.classList.toggle('hidden', !canStart);
+  els.waitBegin.classList.toggle('hidden', !canStart);
+  els.waitBack.classList.toggle('hidden', !room.you.isHost || room.status !== 'lobby');
 }
 
-function renderLobby() {
-  const joining = !!joinPendingId && !onlineRoom;
-  if (els.lobbyName && !joining && !els.lobbyName.value) els.lobbyName.value = loadName();
-  els.lobbyModeLocal.classList.toggle('is-on', lobbyMode === 'local');
-  els.lobbyModeLocal.classList.toggle('btn-ghost', lobbyMode !== 'local');
-  els.lobbyModeOnline.classList.toggle('is-on', lobbyMode === 'online');
-  els.lobbyModeOnline.classList.toggle('btn-ghost', lobbyMode !== 'online');
+function renderSetup() {
+  els.setupModeLocal.classList.toggle('is-on', lobbyMode === 'local');
+  els.setupModeLocal.classList.toggle('btn-ghost', lobbyMode !== 'local');
+  els.setupModeOnline.classList.toggle('is-on', lobbyMode === 'online');
+  els.setupModeOnline.classList.toggle('btn-ghost', lobbyMode !== 'online');
 
   if (lobbyMode === 'online') clampOnlineCounts();
   else if (aiCount < 1) aiCount = 1;
 
-  els.lobbyAiCount.textContent = String(aiCount);
-  els.lobbyAiLabel.textContent = aiCount === 1 ? 'IA' : 'IA';
-  els.lobbyFriendsWrap.classList.toggle('hidden', lobbyMode !== 'local' ? false : true);
-  if (lobbyMode === 'local') els.lobbyFriendsWrap.classList.add('hidden');
-  else els.lobbyFriendsWrap.classList.remove('hidden');
-  if (els.lobbyFriendsCount) els.lobbyFriendsCount.textContent = String(extraHumans);
+  syncRuleToggles();
+
+  els.setupAiCount.textContent = String(aiCount);
+  els.setupFriendsWrap.classList.toggle('hidden', lobbyMode !== 'online');
+  if (els.setupFriendsCount) els.setupFriendsCount.textContent = String(extraHumans);
+
+  els.setupModeHelp.textContent =
+    lobbyMode === 'online'
+      ? 'Stanza privata via link; i posti vuoti diventano IA se inizi.'
+      : 'Questo browser: tu + IA.';
+  els.setupPlayersHelp.textContent =
+    lobbyMode === 'online'
+      ? 'Tu + amici (link) + IA, massimo 6 giocatori.'
+      : 'Tu + avversari IA (2–6 totali).';
 
   const friends = lobbyMode === 'online' ? extraHumans : 0;
   const total = 1 + friends + aiCount;
-  els.lobbyLead.textContent =
-    lobbyMode === 'online'
-      ? 'Stanza via link. Amici + IA, massimo 6 giocatori. Niente account.'
-      : 'Quanti avversari IA? Massimo 6 giocatori in totale.';
-  els.lobbyTotal.textContent =
+  els.setupTotal.textContent =
     lobbyMode === 'online'
       ? `Tu + ${extraHumans} amic${extraHumans === 1 ? 'o' : 'i'} + ${aiCount} IA · ${total} giocatori`
       : `Tu + ${aiCount} IA · ${total} giocatori`;
-  els.lobbySlots.innerHTML = PLAYER_SLOTS.slice(0, total)
+  els.setupSlots.innerHTML = PLAYER_SLOTS.slice(0, total)
     .map((s, i) => {
       const label = i === 0 ? 'Tu' : lobbyMode === 'online' && i <= extraHumans ? 'Amico' : s.name.replace(/^IA /, '');
       return `<span class="lobby-slot"><i style="background:${s.color}"></i>${label}</span>`;
@@ -231,39 +339,36 @@ function renderLobby() {
 
   const minAi = lobbyMode === 'online' ? 0 : 1;
   const maxAi = lobbyMode === 'online' ? MAX_PLAYERS - 1 - extraHumans : MAX_AI;
-  els.lobbyMinus.disabled = aiCount <= minAi;
-  els.lobbyPlus.disabled = aiCount >= maxAi;
-  if (els.lobbyFriendsMinus) els.lobbyFriendsMinus.disabled = extraHumans <= 1;
-  if (els.lobbyFriendsPlus) {
-    els.lobbyFriendsPlus.disabled = 1 + extraHumans + aiCount >= MAX_PLAYERS;
+  els.setupMinus.disabled = aiCount <= minAi;
+  els.setupPlus.disabled = aiCount >= maxAi;
+  if (els.setupFriendsMinus) els.setupFriendsMinus.disabled = extraHumans <= 1;
+  if (els.setupFriendsPlus) {
+    els.setupFriendsPlus.disabled = 1 + extraHumans + aiCount >= MAX_PLAYERS;
   }
-  els.lobbyStart.textContent = joining ? 'Conferma' : lobbyMode === 'online' ? 'Crea stanza' : 'Inizia';
-  els.lobbyCancel.classList.toggle('hidden', !state && !joining);
-  renderWaitRoom(onlineRoom);
+  els.setupStart.textContent = lobbyMode === 'online' ? 'Crea stanza' : 'Inizia';
+}
+
+function clampOnlineCounts() {
+  extraHumans = Math.max(1, Math.min(MAX_PLAYERS - 1, extraHumans));
+  const maxAi = MAX_PLAYERS - 1 - extraHumans;
+  if (aiCount > maxAi) aiCount = maxAi;
+  if (aiCount < 0) aiCount = 0;
 }
 
 const net = createNet({
   error(message) {
     netWait = false;
-    showLobbyError(message);
-    if (joiningRoomId && !onlineRoom) {
-      els.lobbyWait?.classList.add('hidden');
-      els.lobbyStart?.classList.remove('hidden');
-      if (joinPendingId) {
-        els.lobbyJoinLead?.classList.remove('hidden');
-        els.lobbyModes?.classList.add('hidden');
-        els.lobbySetup?.classList.add('hidden');
-      } else {
-        els.lobbySetup?.classList.remove('hidden');
-      }
-    }
+    if (joiningRoomId && !onlineRoom) showFlowError('join', message);
+    else if (onlineRoom?.status === 'lobby') showFlowError('wait', message);
+    else showFlowError('setup', message);
+    if (joiningRoomId && !onlineRoom) showJoinScreen();
+    else if (onlineRoom?.status === 'lobby') showWaitScreen();
   },
   room(room) {
-    showLobbyError('');
-    renderWaitRoom(room);
-    if (room.status === 'playing' && !state) {
-      els.lobbyWaitHint.textContent = 'Avvio…';
-    }
+    clearFlowErrors();
+    renderWait(room);
+    if (room.status === 'lobby') showWaitScreen();
+    else if (room.status === 'playing' && !state) els.waitHint.textContent = 'Avvio…';
   },
   state(msg) {
     const first = !state;
@@ -284,7 +389,7 @@ function applyRemoteState(msg) {
   const hadInvasion = !!state?.pendingInvasion;
   ui.localPlayerId = msg.playerId;
   state = msg.state;
-  closeLobby();
+  enterGame();
   if (onlineRoom) onlineRoom.status = state.phase === 'game_over' ? 'done' : 'playing';
   refresh();
   const key = battleKey(state.lastBattle);
@@ -322,17 +427,98 @@ function dispatch(action, opts = {}) {
   if (opts.ai) maybeRunAi();
 }
 
-function openLobby() {
-  showLobbyError('');
-  if (!joiningRoomId) {
-    onlineRoom = onlineRoom && onlineRoom.status === 'lobby' ? onlineRoom : null;
-  }
-  renderLobby();
-  els.lobby.classList.remove('hidden');
+function startLocalGame() {
+  persistLobby();
+  onlineRoom = null;
+  joiningRoomId = null;
+  joinPendingId = null;
+  history.replaceState(null, '', location.pathname);
+  state = createGame({
+    seed: Date.now() & 0xffffffff,
+    aiCount: Math.max(1, aiCount),
+    vanillaMode,
+    drawEveryTurn,
+  });
+  ui.localPlayerId = Object.values(state.players).find((p) => p.isHuman)?.id || 'P1';
+  resetUi();
+  enterGame();
+  els.overlay.classList.add('hidden');
+  els.fortifyModal.classList.add('hidden');
+  els.diceOverlay.classList.add('hidden');
+  refresh();
+  maybeRunAi();
 }
 
-function closeLobby() {
-  els.lobby.classList.add('hidden');
+function startSetup() {
+  persistLobby();
+  if (lobbyMode === 'online') {
+    void createOnlineRoom();
+    return;
+  }
+  startLocalGame();
+}
+
+async function ensureNet() {
+  try {
+    await net.connect();
+    return true;
+  } catch (err) {
+    showFlowError('setup', describeNetError(err));
+    return false;
+  }
+}
+
+async function createOnlineRoom() {
+  persistLobby();
+  showFlowError('setup', '');
+  if (!(await ensureNet())) return;
+  showWaitScreen();
+  els.waitHint.textContent = 'Apertura stanza…';
+  els.waitBegin.classList.add('hidden');
+  try {
+    await net.create({
+      name: playerName(),
+      extraHumans,
+      aiCount,
+      vanillaMode,
+      drawEveryTurn,
+    });
+  } catch (err) {
+    showSetup();
+    showFlowError('setup', describeNetError(err));
+  }
+}
+
+async function confirmJoin() {
+  const name = (els.joinName?.value || '').trim();
+  if (!name) {
+    showFlowError('join', 'Inserisci un nome, poi conferma.');
+    els.joinName?.focus();
+    return;
+  }
+  persistLobby();
+  showFlowError('join', '');
+  joiningRoomId = joinPendingId;
+  showWaitScreen();
+  els.waitHint.textContent = 'Connessione alla stanza…';
+  if (!(await ensureNet())) {
+    showJoinScreen();
+    return;
+  }
+  try {
+    await net.join({ roomId: joinPendingId, name });
+  } catch (err) {
+    showJoinScreen();
+    showFlowError('join', describeNetError(err));
+  }
+}
+
+function joinOnlineRoom(roomId) {
+  lobbyMode = 'online';
+  joinPendingId = roomId;
+  joiningRoomId = null;
+  onlineRoom = null;
+  showJoinScreen();
 }
 
 function resetUi() {
@@ -346,97 +532,6 @@ function resetUi() {
   lastShownBattleKey = null;
   busy = false;
   netWait = false;
-}
-
-function newGame() {
-  persistLobby();
-  if (joinPendingId && !onlineRoom) {
-    void confirmJoin();
-    return;
-  }
-  if (lobbyMode === 'online') {
-    void createOnlineRoom();
-    return;
-  }
-  onlineRoom = null;
-  joiningRoomId = null;
-  history.replaceState(null, '', location.pathname);
-  state = createGame({ seed: Date.now() & 0xffffffff, aiCount: Math.max(1, aiCount) });
-  ui.localPlayerId = Object.values(state.players).find((p) => p.isHuman)?.id || 'P1';
-  resetUi();
-  closeLobby();
-  els.overlay.classList.add('hidden');
-  els.fortifyModal.classList.add('hidden');
-  els.diceOverlay.classList.add('hidden');
-  refresh();
-  maybeRunAi();
-}
-
-async function ensureNet() {
-  try {
-    await net.connect();
-    return true;
-  } catch (err) {
-    showLobbyError(describeNetError(err));
-    return false;
-  }
-}
-
-async function createOnlineRoom() {
-  persistLobby();
-  showLobbyError('');
-  if (!(await ensureNet())) return;
-  els.lobbyStart.classList.add('hidden');
-  els.lobbyWait.classList.remove('hidden');
-  els.lobbyWaitHint.textContent = 'Apertura stanza…';
-  try {
-    await net.create({ name: playerName(), extraHumans, aiCount });
-  } catch (err) {
-    els.lobbyStart.classList.remove('hidden');
-    els.lobbyWait.classList.add('hidden');
-    showLobbyError(describeNetError(err));
-  }
-}
-
-async function confirmJoin() {
-  const name = (els.lobbyName?.value || '').trim();
-  if (!name) {
-    showLobbyError('Inserisci un nome, poi conferma.');
-    els.lobbyName?.focus();
-    return;
-  }
-  persistLobby();
-  showLobbyError('');
-  joiningRoomId = joinPendingId;
-  els.lobbyStart.classList.add('hidden');
-  els.lobbyWait.classList.remove('hidden');
-  els.lobbyJoinLead?.classList.add('hidden');
-  els.lobbyWaitHint.textContent = 'Connessione alla stanza…';
-  if (!(await ensureNet())) {
-    els.lobbyStart.classList.remove('hidden');
-    els.lobbyWait.classList.add('hidden');
-    els.lobbyJoinLead?.classList.remove('hidden');
-    return;
-  }
-  try {
-    await net.join({ roomId: joinPendingId, name });
-  } catch (err) {
-    els.lobbyStart.classList.remove('hidden');
-    els.lobbyWait.classList.add('hidden');
-    els.lobbyJoinLead?.classList.remove('hidden');
-    showLobbyError(describeNetError(err));
-  }
-}
-
-async function joinOnlineRoom(roomId) {
-  lobbyMode = 'online';
-  joinPendingId = roomId;
-  joiningRoomId = null;
-  onlineRoom = null;
-  if (els.lobbyName) els.lobbyName.value = '';
-  renderLobby();
-  els.lobby.classList.remove('hidden');
-  els.lobbyName?.focus();
 }
 
 function battleKey(b) {
@@ -532,9 +627,10 @@ els.fortifyConfirm.addEventListener('click', () => {
 
 function refresh() {
   if (!state) {
-    els.mapHint.textContent = 'Scegli gli avversari IA per iniziare.';
+    els.mapHint.textContent = 'Nuova partita dalla home.';
     return;
   }
+  els.app?.classList.toggle('vanilla-mode', !!state.vanillaMode);
   ui.highlightIds = computeHighlights(state, ui);
   renderMap(els.map, state, ui, onTerritoryClick);
   renderHud(els, state, ui);
@@ -839,78 +935,107 @@ function maybeRunAi() {
   }, state.phase === 'setup' ? 120 : 350);
 }
 
-document.getElementById('btn-new').addEventListener('click', openLobby);
+function returnToHome() {
+  state = null;
+  onlineRoom = null;
+  joiningRoomId = null;
+  joinPendingId = null;
+  net.close();
+  history.replaceState(null, '', location.pathname);
+  els.overlay.classList.add('hidden');
+  els.app?.classList.remove('vanilla-mode');
+  showHome();
+}
+
+document.getElementById('btn-new').addEventListener('click', () => {
+  if (state) returnToHome();
+  else showSetup();
+});
 document.getElementById('btn-overlay-new').addEventListener('click', () => {
   els.overlay.classList.add('hidden');
-  openLobby();
+  returnToHome();
 });
 
-els.lobbyMinus.addEventListener('click', () => {
+els.homeNew?.addEventListener('click', showSetup);
+els.setupBack?.addEventListener('click', showHome);
+els.setupStart?.addEventListener('click', startSetup);
+els.joinBack?.addEventListener('click', () => {
+  joinPendingId = null;
+  joiningRoomId = null;
+  history.replaceState(null, '', location.pathname);
+  showHome();
+});
+els.joinConfirm?.addEventListener('click', () => void confirmJoin());
+els.waitBack?.addEventListener('click', () => {
+  net.close();
+  onlineRoom = null;
+  showSetup();
+});
+els.waitBegin?.addEventListener('click', () => net.start());
+els.waitCopy?.addEventListener('click', async () => {
+  const link = els.waitLink.value;
+  try {
+    await navigator.clipboard.writeText(link);
+    els.waitCopy.textContent = 'Copiato';
+    setTimeout(() => {
+      els.waitCopy.textContent = 'Copia';
+    }, 1200);
+  } catch {
+    els.waitLink.select();
+  }
+});
+
+els.setupMinus?.addEventListener('click', () => {
   const minAi = lobbyMode === 'online' ? 0 : 1;
   if (aiCount <= minAi) return;
   aiCount -= 1;
-  renderLobby();
+  renderSetup();
 });
-els.lobbyPlus.addEventListener('click', () => {
+els.setupPlus?.addEventListener('click', () => {
   const maxAi = lobbyMode === 'online' ? MAX_PLAYERS - 1 - extraHumans : MAX_AI;
   if (aiCount >= maxAi) return;
   aiCount += 1;
-  renderLobby();
+  renderSetup();
 });
-els.lobbyFriendsMinus?.addEventListener('click', () => {
+els.setupFriendsMinus?.addEventListener('click', () => {
   if (extraHumans <= 1) return;
   extraHumans -= 1;
-  renderLobby();
+  renderSetup();
 });
-els.lobbyFriendsPlus?.addEventListener('click', () => {
+els.setupFriendsPlus?.addEventListener('click', () => {
   if (1 + extraHumans + aiCount >= MAX_PLAYERS) return;
   extraHumans += 1;
-  renderLobby();
+  renderSetup();
 });
-els.lobbyModeLocal.addEventListener('click', () => {
+els.setupModeLocal?.addEventListener('click', () => {
   lobbyMode = 'local';
-  joiningRoomId = null;
-  if (!state) onlineRoom = null;
-  showLobbyError('');
-  renderLobby();
+  renderSetup();
 });
-els.lobbyModeOnline.addEventListener('click', () => {
+els.setupModeOnline?.addEventListener('click', () => {
   lobbyMode = 'online';
-  showLobbyError('');
-  renderLobby();
+  renderSetup();
 });
-els.lobbyStart.addEventListener('click', newGame);
-els.lobbyBegin.addEventListener('click', () => net.start());
-els.lobbyCopy.addEventListener('click', async () => {
-  const link = els.lobbyLink.value;
-  try {
-    await navigator.clipboard.writeText(link);
-    els.lobbyCopy.textContent = 'Copiato';
-    setTimeout(() => {
-      els.lobbyCopy.textContent = 'Copia';
-    }, 1200);
-  } catch {
-    els.lobbyLink.select();
-  }
+els.setupDraw?.addEventListener('click', () => {
+  if (vanillaMode) return;
+  drawEveryTurn = !drawEveryTurn;
+  renderSetup();
 });
-els.lobbyName?.addEventListener('change', persistLobby);
-els.lobbyName?.addEventListener('keydown', (ev) => {
+els.setupVanilla?.addEventListener('click', () => {
+  vanillaMode = !vanillaMode;
+  if (vanillaMode) drawEveryTurn = false;
+  renderSetup();
+});
+els.setupName?.addEventListener('change', persistLobby);
+els.joinName?.addEventListener('change', persistLobby);
+els.joinName?.addEventListener('keydown', (ev) => {
   if (ev.key !== 'Enter') return;
   ev.preventDefault();
-  if (joinPendingId && !onlineRoom) void confirmJoin();
+  void confirmJoin();
 });
-els.lobbyCancel.addEventListener('click', () => {
-  if (joinPendingId && !onlineRoom && !state) {
-    joinPendingId = null;
-    joiningRoomId = null;
-    history.replaceState(null, '', location.pathname);
-    lobbyMode = 'local';
-    showLobbyError('');
-    renderLobby();
-    return;
-  }
-  if (!state) return;
-  closeLobby();
+els.setupName?.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  startSetup();
 });
 
 const appEl = document.getElementById('app');
@@ -929,7 +1054,6 @@ railBackdrop?.addEventListener('click', () => setRailOpen(false));
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') {
     setRailOpen(false);
-    if (state && !els.lobby.classList.contains('hidden')) closeLobby();
   }
 });
 
@@ -961,5 +1085,5 @@ const roomParam = new URLSearchParams(location.search).get('room');
 if (roomParam) {
   joinOnlineRoom(roomParam.toLowerCase());
 } else {
-  openLobby();
+  showHome();
 }

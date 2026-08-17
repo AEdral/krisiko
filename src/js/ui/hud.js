@@ -203,7 +203,11 @@ export function renderHud(els, state, ui) {
       <div class="dm"><span class="k">Territori</span><span class="v">${countOwned(state, human.id)}/42</span></div>
       <div class="dm"><span class="k">Armate</span><span class="v">${countArmies(state, human.id)}</span></div>
       <div class="dm"><span class="k">Bonus</span><span class="v">+${getContinentBonus(state, human.id)}</span></div>
-      <div class="dm"><span class="k">Carte</span><span class="v">${human.hand.length}/${handLimit(state, human.id)}</span></div>
+      ${
+        state.vanillaMode
+          ? ''
+          : `<div class="dm"><span class="k">Carte</span><span class="v">${human.hand.length}/${handLimit(state, human.id)}</span></div>`
+      }
       ${
         state.phase === 'setup'
           ? `<div class="dm"><span class="k">Schiera</span><span class="v">${human.setupRemaining}</span></div>`

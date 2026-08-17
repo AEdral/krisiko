@@ -54,6 +54,8 @@ function publicRoom(room, clientId) {
     status: room.status,
     extraHumans: room.extraHumans,
     aiCount: room.aiCount,
+    vanillaMode: room.vanillaMode,
+    drawEveryTurn: room.drawEveryTurn,
     hostClientId: room.hostClientId,
     you: {
       clientId,
@@ -96,7 +98,16 @@ function broadcastState(room) {
   }
 }
 
-export function createRoom({ hostClientId, hostName, extraHumans, aiCount, ws, id: forcedId }) {
+export function createRoom({
+  hostClientId,
+  hostName,
+  extraHumans,
+  aiCount,
+  vanillaMode,
+  drawEveryTurn,
+  ws,
+  id: forcedId,
+}) {
   sweep();
   if (rooms.size >= MAX_ROOMS) {
     return { error: 'Troppe stanze attive, riprova tra poco.' };
@@ -125,6 +136,8 @@ export function createRoom({ hostClientId, hostName, extraHumans, aiCount, ws, i
     hostClientId,
     extraHumans: extra,
     aiCount: ai,
+    vanillaMode: !!vanillaMode,
+    drawEveryTurn: !vanillaMode && !!drawEveryTurn,
     seats,
     status: 'lobby',
     state: null,
@@ -203,7 +216,12 @@ export function startRoom(roomId, clientId) {
     isHuman: s.kind === 'human',
   }));
 
-  room.state = createGame({ seed: Date.now() & 0xffffffff, seats });
+  room.state = createGame({
+    seed: Date.now() & 0xffffffff,
+    seats,
+    vanillaMode: room.vanillaMode,
+    drawEveryTurn: room.drawEveryTurn,
+  });
   room.status = 'playing';
   room.lastActive = Date.now();
   broadcastRoom(room);

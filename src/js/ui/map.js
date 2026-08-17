@@ -12,9 +12,8 @@ const cam = { x: BASE_X, y: BASE_Y, w: BASE_W, h: BASE_H };
 const pointers = new Map();
 let cameraBound = false;
 let suppressClick = false;
-let lastPan = null;
 let lastPinch = null;
-let dragged = false;
+const PAN_THRESHOLD = 6;
 
 function addSeaPath(layer, d, label) {
   const path = document.createElementNS(NS, 'path');
@@ -116,20 +115,24 @@ function bindMapCamera(svg) {
 
   svg.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    try {
-      svg.setPointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    dragged = false;
+    suppressClick = false;
+    pointers.set(e.pointerId, {
+      startX: e.clientX,
+      startY: e.clientY,
+      x: e.clientX,
+      y: e.clientY,
+      panning: false,
+      lastPanX: e.clientX,
+      lastPanY: e.clientY,
+    });
     lastPinch = null;
-    lastPan = { x: e.clientX, y: e.clientY };
   });
 
   svg.addEventListener('pointermove', (e) => {
-    if (!pointers.has(e.pointerId)) return;
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const pt = pointers.get(e.pointerId);
+    if (!pt) return;
+    pt.x = e.clientX;
+    pt.y = e.clientY;
 
     if (pointers.size >= 2) {
       const pts = [...pointers.values()];
@@ -140,41 +143,54 @@ function bindMapCamera(svg) {
       const midY = (a.y + b.y) / 2;
       if (lastPinch && lastPinch.dist > 0) {
         zoomAt(svg, midX, midY, dist / lastPinch.dist);
-        dragged = true;
+        suppressClick = true;
       }
       lastPinch = { dist };
-      lastPan = null;
       return;
     }
 
-    if (!lastPan) return;
-    const dx = e.clientX - lastPan.x;
-    const dy = e.clientY - lastPan.y;
-    if (Math.hypot(dx, dy) > 4) dragged = true;
-    const p0 = svgPoint(svg, lastPan.x, lastPan.y);
+    if (!pt.panning) {
+      if (Math.hypot(e.clientX - pt.startX, e.clientY - pt.startY) < PAN_THRESHOLD) return;
+      pt.panning = true;
+      suppressClick = true;
+      pt.lastPanX = e.clientX;
+      pt.lastPanY = e.clientY;
+      try {
+        svg.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    const p0 = svgPoint(svg, pt.lastPanX, pt.lastPanY);
     const p1 = svgPoint(svg, e.clientX, e.clientY);
     cam.x -= p1.x - p0.x;
     cam.y -= p1.y - p0.y;
     clampCam();
     applyCam(svg);
-    lastPan = { x: e.clientX, y: e.clientY };
+    pt.lastPanX = e.clientX;
+    pt.lastPanY = e.clientY;
   });
 
   const endPointer = (e) => {
-    if (!pointers.has(e.pointerId)) return;
+    const pt = pointers.get(e.pointerId);
+    if (!pt) return;
+    if (pt.panning) {
+      try {
+        svg.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+    }
     pointers.delete(e.pointerId);
     lastPinch = null;
     if (pointers.size === 0) {
-      lastPan = null;
-      if (dragged) {
-        suppressClick = true;
+      if (suppressClick) {
         setTimeout(() => {
           suppressClick = false;
         }, 0);
       }
-    } else {
-      const only = [...pointers.values()][0];
-      lastPan = { x: only.x, y: only.y };
     }
   };
   svg.addEventListener('pointerup', endPointer);
