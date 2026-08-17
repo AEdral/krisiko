@@ -56,11 +56,17 @@ html, body {
 }
 
 .brand h1 {
-  font-family: 'Archivo Black', sans-serif;
   margin: 0;
-  font-size: 1.35rem;
-  letter-spacing: 0.04em;
-  color: var(--accent);
+  display: flex;
+  align-items: center;
+  line-height: 0;
+}
+
+.brand img {
+  display: block;
+  height: 34px;
+  width: auto;
+  max-width: min(240px, 46vw);
 }
 
 .top-meta {
@@ -1099,8 +1105,8 @@ html, body {
     z-index: 35;
   }
 
-  .brand h1 {
-    font-size: 1.05rem;
+  .brand img {
+    height: 26px;
   }
 
   .top-meta {
