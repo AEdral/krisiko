@@ -7,7 +7,10 @@ import {
   getContinentBonus,
   getContinentStatus,
   getAlivePlayerIds,
+  getClassicCard,
+  isClassicCardId,
 } from '../engine/game.js';
+import { isValidClassicSet, CLASSIC_HAND_LIMIT } from '../data/classic-cards.js';
 
 function countOwned(state, pid) {
   return Object.values(state.territories).filter((t) => t.owner === pid).length;
@@ -110,15 +113,19 @@ function opponentsHtml(state, ui) {
             <div class="stat-chip"><span class="k">Bonus</span><span class="v">+${getContinentBonus(state, id)}</span></div>
           </div>
           <div class="relic-mini">
-            <div class="name">Reliquia: ${escapeHtml(relic?.name || '—')}</div>
+            <div class="name">${state.vanillaMode ? 'Modalità classico' : `Reliquia: ${escapeHtml(relic?.name || '—')}`}</div>
           </div>
           <div class="opp-expand-hint">Clic per dettagli ▾</div>
         </div>
         <div class="opp-details">
           <div class="opp-details-inner">
-            <div class="relic-mini">
+            ${
+              state.vanillaMode
+                ? `<div class="relic-mini"><div class="desc">Carte territorio tradizionali, niente reliquie Krisiko.</div></div>`
+                : `<div class="relic-mini">
               <div class="desc">${escapeHtml(relic?.description || '')}</div>
-            </div>
+            </div>`
+            }
             <div class="relic-mini">
               <div class="name">Obiettivo: segreto</div>
             </div>
@@ -165,7 +172,9 @@ export function renderHud(els, state, ui) {
   els.eventBlock.innerHTML = `
     <h2>Evento globale</h2>
     ${
-      ev
+      state.vanillaMode
+        ? `<p class="line" style="color:var(--muted)">Non disponibile in modalità classico</p>`
+        : ev
         ? `<p class="line"><strong>${escapeHtml(ev.name)}</strong></p>
            <p class="line" style="color:var(--muted);font-size:0.75rem">${escapeHtml(ev.description)}</p>`
         : `<p class="line" style="color:var(--muted)">Nessuno (dal round 2)</p>`
@@ -203,7 +212,11 @@ export function renderHud(els, state, ui) {
       <div class="dm"><span class="k">Territori</span><span class="v">${countOwned(state, human.id)}/42</span></div>
       <div class="dm"><span class="k">Armate</span><span class="v">${countArmies(state, human.id)}</span></div>
       <div class="dm"><span class="k">Bonus</span><span class="v">+${getContinentBonus(state, human.id)}</span></div>
-      <div class="dm"><span class="k">Carte</span><span class="v">${human.hand.length}/${handLimit(state, human.id)}</span></div>
+      ${
+        state.vanillaMode
+          ? `<div class="dm"><span class="k">Carte</span><span class="v">${human.hand.length}/${CLASSIC_HAND_LIMIT}</span></div>`
+          : `<div class="dm"><span class="k">Carte</span><span class="v">${human.hand.length}/${handLimit(state, human.id)}</span></div>`
+      }
       ${
         state.phase === 'setup'
           ? `<div class="dm"><span class="k">Schiera</span><span class="v">${human.setupRemaining}</span></div>`
@@ -225,20 +238,32 @@ function renderHand(el, state, human, ui) {
     return;
   }
   if (!human.hand.length) {
-    el.innerHTML = `<div class="hand-empty">Nessuna carta</div>`;
+    el.innerHTML = `<div class="hand-empty">${state.vanillaMode ? 'Nessuna carta territorio' : 'Nessuna carta'}</div>`;
     return;
   }
   human.hand.forEach((cardId, index) => {
-    const card = CARDS[cardId];
+    const classic = state.vanillaMode || isClassicCardId(cardId);
+    const card = classic ? getClassicCard(cardId) : CARDS[cardId];
     if (!card) return;
+    const selected = state.vanillaMode
+      ? (ui.classicCardSelection || []).includes(index)
+      : ui.selectedCardIndex === index;
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'card' + (ui.selectedCardIndex === index ? ' selected' : '');
-    btn.innerHTML = `
-      <div class="ctype">${card.type}</div>
-      <div class="cname">${escapeHtml(card.name)}</div>
-      <div class="cdesc">${escapeHtml(card.description)}</div>
-    `;
+    btn.className = 'card' + (classic ? ' classic' : '') + (selected ? ' selected' : '');
+    if (classic) {
+      btn.innerHTML = `
+        <div class="ctype classic-symbol">${card.emoji}</div>
+        <div class="cname">${escapeHtml(card.symbolName)}</div>
+        <div class="cdesc">${escapeHtml(card.name)}</div>
+      `;
+    } else {
+      btn.innerHTML = `
+        <div class="ctype">${card.type}</div>
+        <div class="cname">${escapeHtml(card.name)}</div>
+        <div class="cdesc">${escapeHtml(card.description)}</div>
+      `;
+    }
     btn.addEventListener('click', () => ui.onCardClick?.(index, card));
     el.appendChild(btn);
   });
@@ -289,6 +314,32 @@ export function renderActions(el, state, ui) {
     hint.textContent = 'Mano piena: scarta una carta.';
     el.appendChild(hint);
     return;
+  }
+
+  if (state.vanillaMode && state.pendingClassicDraw) {
+    const hint = document.createElement('p');
+    hint.className = 'line';
+    hint.style.margin = '0';
+    hint.textContent = 'Mano piena: scambia un set di 3 carte per pescare quella vinta.';
+    el.appendChild(hint);
+  }
+
+  if (
+    state.vanillaMode &&
+    state.phase === 'reinforce' &&
+    (ui.classicCardSelection?.length === 3)
+  ) {
+    const valid = isValidClassicSet(
+      state.players[pid].hand,
+      ui.classicCardSelection,
+    );
+    const trade = document.createElement('button');
+    trade.type = 'button';
+    trade.className = 'btn';
+    trade.disabled = !valid;
+    trade.textContent = valid ? 'Scambia set' : 'Set non valido';
+    trade.addEventListener('click', () => ui.onTradeClassic?.());
+    el.appendChild(trade);
   }
 
   const end = document.createElement('button');

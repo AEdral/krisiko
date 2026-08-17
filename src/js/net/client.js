@@ -184,7 +184,7 @@ export function createNet(handlers = {}) {
       return mode;
     },
     connect,
-    async create({ name, extraHumans, aiCount }) {
+    async create({ name, extraHumans, aiCount, vanillaMode, drawEveryTurn }) {
       if (mode === 'p2p') {
         p2p = await openP2pHost({ clientId, onMessage: onUiMessage });
         p2p.sendToEngine({ type: 'hello', clientId });
@@ -193,11 +193,13 @@ export function createNet(handlers = {}) {
           name,
           extraHumans,
           aiCount,
+          vanillaMode,
+          drawEveryTurn,
           roomId: p2p.roomId,
         });
         return;
       }
-      send({ type: 'create', name, extraHumans, aiCount });
+      send({ type: 'create', name, extraHumans, aiCount, vanillaMode, drawEveryTurn });
     },
     async join({ roomId, name }) {
       if (mode === 'p2p') {

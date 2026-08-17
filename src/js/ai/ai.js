@@ -4,6 +4,7 @@ import {
   areAdjacent,
   CARDS,
 } from '../engine/game.js';
+import { findClassicTradeSet } from '../data/classic-cards.js';
 
 /**
  * Simple heuristic AI: reinforce fronts, attack when favored, fortify borders, play easy cards.
@@ -27,6 +28,10 @@ export function runAiTurn(state, opts = {}) {
       continue;
     }
 
+    if (state.vanillaMode && state.phase === 'reinforce') {
+      if (aiClassicTrade(state)) continue;
+    }
+
     if (state.phase === 'setup') {
       aiSetupPlace(state);
       // After one place, turn may switch — exit so caller can refresh / continue
@@ -39,7 +44,7 @@ export function runAiTurn(state, opts = {}) {
     }
 
     if (state.phase === 'attack') {
-      if (attacks === 0) maybePlayActionCard(state);
+      if (attacks === 0 && !state.vanillaMode) maybePlayActionCard(state);
       if (attacks >= maxAttacks) {
         applyAction(state, { type: 'END_PHASE' });
         continue;
@@ -73,6 +78,9 @@ export function runAiTurn(state, opts = {}) {
   ) {
     if (state.pendingDrawAfterDiscard) {
       applyAction(state, { type: 'DISCARD_FOR_DRAW', handIndex: 0 });
+      continue;
+    }
+    if (state.vanillaMode && state.phase === 'reinforce' && aiClassicTrade(state)) {
       continue;
     }
     if (state.phase === 'reinforce' && state.reinforcementsRemaining > 0) {
@@ -113,7 +121,19 @@ function fronts(state, pid) {
   return result;
 }
 
+function aiClassicTrade(state) {
+  const pid = state.currentPlayerId;
+  const hand = state.players[pid].hand;
+  const set = findClassicTradeSet(hand);
+  if (!set) return false;
+  const must = state.pendingClassicDraw || hand.length >= 5;
+  if (!must && hand.length < 4) return false;
+  applyAction(state, { type: 'TRADE_CLASSIC_CARDS', handIndices: set });
+  return true;
+}
+
 function aiReinforce(state) {
+  if (state.vanillaMode && aiClassicTrade(state)) return;
   const pid = state.currentPlayerId;
   if (state.reinforcementsRemaining <= 0) {
     applyAction(state, { type: 'END_PHASE' });
@@ -154,11 +174,12 @@ function aiAttack(state) {
   }
   if (!best) return false;
 
-  // Set a combat card if useful
-  const hand = state.players[pid].hand;
-  const combatIdx = hand.findIndex((id) => CARDS[id].type === 'combat' && CARDS[id].effect.type !== 'def_high_die_bonus');
-  if (combatIdx >= 0 && best.score <= 3) {
-    applyAction(state, { type: 'SET_COMBAT_CARD', handIndex: combatIdx });
+  if (!state.vanillaMode) {
+    const hand = state.players[pid].hand;
+    const combatIdx = hand.findIndex((id) => CARDS[id]?.type === 'combat' && CARDS[id].effect.type !== 'def_high_die_bonus');
+    if (combatIdx >= 0 && best.score <= 3) {
+      applyAction(state, { type: 'SET_COMBAT_CARD', handIndex: combatIdx });
+    }
   }
 
   applyAction(state, {

@@ -7,6 +7,16 @@ import {
 } from '../data/map.js';
 import { RELICS, RELIC_IDS } from '../data/relics.js';
 import { CARDS, createCardDeck } from '../data/cards.js';
+import {
+  createClassicDeck,
+  getClassicCard,
+  isValidClassicSet,
+  findClassicTradeSet,
+  classicTradeValue,
+  classicCardLogName,
+  CLASSIC_HAND_LIMIT,
+  isClassicCardId,
+} from '../data/classic-cards.js';
 import { EVENTS, createEventDeck } from '../data/events.js';
 import { MISSIONS, MISSION_IDS, checkMission } from '../data/missions.js';
 import { createRng } from './rng.js';
@@ -99,6 +109,7 @@ export function getContinentStatus(state, playerId) {
 }
 
 export function playerHasRelic(state, playerId, effectType) {
+  if (state.vanillaMode) return false;
   const relicId = state.players[playerId].relicId;
   return relicId && RELICS[relicId]?.effect?.type === effectType;
 }
@@ -109,7 +120,8 @@ export function getRelicEffect(state, playerId) {
 }
 
 export function getActiveEvent(state) {
-  return state.activeEventId ? EVENTS[state.activeEventId] : null;
+  if (state.vanillaMode || !state.activeEventId) return null;
+  return EVENTS[state.activeEventId] ?? null;
 }
 
 export function isImmuneToHarm(state, playerId) {
@@ -117,6 +129,7 @@ export function isImmuneToHarm(state, playerId) {
 }
 
 export function handLimit(state, playerId) {
+  if (state.vanillaMode) return CLASSIC_HAND_LIMIT;
   let lim = BASE_HAND_SIZE;
   if (playerHasRelic(state, playerId, 'hand_size_bonus')) {
     lim += getRelicEffect(state, playerId).value;
@@ -206,13 +219,33 @@ function maxDefendDice(state, armies) {
 
 function drawCard(state, playerId) {
   const p = state.players[playerId];
+  const limit = handLimit(state, playerId);
+  if (p.hand.length >= limit) {
+    if (state.vanillaMode) return { needsTrade: true };
+    if (state.cardDeck.length === 0) {
+      if (state.cardDiscard.length === 0) return null;
+      state.cardDeck = state.rng.shuffle(state.cardDiscard);
+      state.cardDiscard = [];
+    }
+    return { needsDiscard: true };
+  }
+
+  if (state.vanillaMode) {
+    if (state.cardDeck.length === 0) {
+      if (state.cardDiscard.length === 0) return null;
+      state.cardDeck = state.rng.shuffle(state.cardDiscard);
+      state.cardDiscard = [];
+    }
+    const cardId = state.cardDeck.pop();
+    p.hand.push(cardId);
+    return { cardId };
+  }
+
   if (state.cardDeck.length === 0) {
     if (state.cardDiscard.length === 0) return null;
     state.cardDeck = state.rng.shuffle(state.cardDiscard);
     state.cardDiscard = [];
   }
-  const limit = handLimit(state, playerId);
-  if (p.hand.length >= limit) return { needsDiscard: true };
   const cardId = state.cardDeck.pop();
   p.hand.push(cardId);
   return { cardId };
@@ -248,9 +281,19 @@ function beginPlayerTurn(state) {
   ensureStartTurnEffects(state);
   const p = state.players[state.currentPlayerId];
   log(state, `${p.name} — rinforzi: ${state.reinforcementsRemaining}.`);
+  if (state.drawEveryTurn) {
+    const result = drawCard(state, state.currentPlayerId);
+    if (result?.needsDiscard) {
+      state.pendingDrawAfterDiscard = true;
+      log(state, 'Mano piena: scarta 1 carta per pescare.');
+    } else if (result?.cardId) {
+      log(state, `Pesci ${CARDS[result.cardId].name}.`);
+    }
+  }
 }
 
 function revealEvent(state) {
+  if (state.vanillaMode) return;
   if (state.eventDeck.length === 0) {
     state.eventDeck = createEventDeck(state.rng);
   }
@@ -284,9 +327,11 @@ function checkVictory(state) {
 
 /**
  * Create initial game state.
- * @param {{ seed?: number, humanId?: string, playerCount?: number, aiCount?: number, seats?: { id?: string, name?: string, isHuman?: boolean }[] }} opts
+ * @param {{ seed?: number, humanId?: string, playerCount?: number, aiCount?: number, vanillaMode?: boolean, drawEveryTurn?: boolean, seats?: { id?: string, name?: string, isHuman?: boolean }[] }} opts
  */
 export function createGame(opts = {}) {
+  const vanillaMode = !!opts.vanillaMode;
+  const drawEveryTurn = !vanillaMode && !!opts.drawEveryTurn;
   const rng = createRng(opts.seed ?? Date.now());
   const humanId = opts.humanId ?? 'P1';
   const seatSpecs = Array.isArray(opts.seats) && opts.seats.length ? opts.seats : null;
@@ -322,7 +367,7 @@ export function createGame(opts = {}) {
   const othersOf = (pid) => playerOrder.filter((id) => id !== pid);
 
   playerOrder.forEach((pid, i) => {
-    players[pid].relicId = relicPool[i];
+    if (!vanillaMode) players[pid].relicId = relicPool[i];
     players[pid].missionId = missionPool[i];
     if (players[pid].missionId === 'eliminate_enemy') {
       const others = othersOf(pid);
@@ -364,20 +409,32 @@ export function createGame(opts = {}) {
     mustAttackSatisfied: false,
     pendingCombatCard: null,
     pendingInvasion: null,
-    cardDeck: createCardDeck(rng),
+    vanillaMode,
+    drawEveryTurn,
+    cardDeck: vanillaMode ? createClassicDeck(rng) : createCardDeck(rng),
     cardDiscard: [],
-    eventDeck: createEventDeck(rng),
+    classicTrades: 0,
+    pendingClassicDraw: false,
+    eventDeck: vanillaMode ? [] : createEventDeck(rng),
     activeEventId: null,
     winnerId: null,
     lastBattle: null,
     log: [],
   };
 
-  log(state, `Partita iniziata (${playerCount} giocatori, seed ${state.seed}).`);
+  const modeBits = [
+    vanillaMode ? 'Classico' : 'Krisiko',
+    drawEveryTurn ? 'pesca ogni turno' : null,
+  ].filter(Boolean);
+  log(state, `Partita iniziata (${playerCount} giocatori, seed ${state.seed}${modeBits.length ? ` · ${modeBits.join(' · ')}` : ''}).`);
   log(state, `Schieramento: 1 armata per territorio; ${startArmies} armate a testa, il resto a turni.`);
   for (const pid of playerOrder) {
     const p = players[pid];
-    log(state, `${p.name} reliquia: ${RELICS[p.relicId].name}. Obiettivo segreto assegnato.`);
+    if (!vanillaMode && p.relicId) {
+      log(state, `${p.name} reliquia: ${RELICS[p.relicId].name}. Obiettivo segreto assegnato.`);
+    } else {
+      log(state, `${p.name} obiettivo segreto assegnato.`);
+    }
   }
   log(
     state,
@@ -439,6 +496,10 @@ export function getLegalActions(state) {
     } else {
       actions.push({ type: 'END_PHASE' });
     }
+    if (state.vanillaMode) {
+      const set = findClassicTradeSet(state.players[pid].hand);
+      if (set) actions.push({ type: 'TRADE_CLASSIC_CARDS', handIndices: set });
+    }
   }
 
   if (state.phase === 'attack') {
@@ -476,7 +537,8 @@ export function getLegalActions(state) {
     }
   }
 
-  // Action cards
+  // Krisiko action cards (not in classico)
+  if (state.vanillaMode) return actions;
   for (let i = 0; i < state.players[pid].hand.length; i++) {
     const cardId = state.players[pid].hand[i];
     const card = CARDS[cardId];
@@ -519,6 +581,8 @@ export function applyAction(state, action) {
       return state;
     case 'DISCARD_FOR_DRAW':
       return discardForDraw(state, action);
+    case 'TRADE_CLASSIC_CARDS':
+      return tradeClassicCards(state, action);
     default:
       log(state, `Azione sconosciuta: ${action.type}`);
       return state;
@@ -609,14 +673,25 @@ function endPhase(state) {
       }
     }
 
-    if (state.conqueredThisTurn) {
-      const result = drawCard(state, pid);
-      if (result?.needsDiscard) {
-        state.pendingDrawAfterDiscard = true;
-        log(state, 'Mano piena: scarta 1 carta per pescare.');
-        // Auto-discard oldest for AI / simplicity if discard not provided — UI handles
-      } else if (result?.cardId) {
-        log(state, `Pesci ${CARDS[result.cardId].name}.`);
+    if (state.conqueredThisTurn && (!state.drawEveryTurn || state.vanillaMode)) {
+      const hand = state.players[pid].hand;
+      if (state.vanillaMode && hand.length >= CLASSIC_HAND_LIMIT) {
+        state.pendingClassicDraw = true;
+        log(state, 'Mano piena: scambia un set di 3 carte per pescare.');
+      } else {
+        const result = drawCard(state, pid);
+        if (result?.needsTrade) {
+          state.pendingClassicDraw = true;
+          log(state, 'Mano piena: scambia un set di 3 carte per pescare.');
+        } else if (result?.needsDiscard) {
+          state.pendingDrawAfterDiscard = true;
+          log(state, 'Mano piena: scarta 1 carta per pescare.');
+        } else if (result?.cardId) {
+          log(
+            state,
+            `Pesci ${state.vanillaMode ? classicCardLogName(result.cardId) : CARDS[result.cardId].name}.`,
+          );
+        }
       }
     }
     state.phase = 'fortify';
@@ -944,6 +1019,51 @@ function playActionCard(state, action) {
   return state;
 }
 
+function tradeClassicCards(state, action) {
+  if (!state.vanillaMode || state.phase !== 'reinforce') return state;
+  const pid = state.currentPlayerId;
+  const hand = state.players[pid].hand;
+  const indices = [...(action.handIndices || [])].sort((a, b) => b - a);
+  if (!isValidClassicSet(hand, indices)) {
+    log(state, 'Set non valido: 3 uguali o 1 per simbolo.');
+    return state;
+  }
+
+  const traded = [];
+  for (const idx of indices) {
+    traded.push(hand.splice(idx, 1)[0]);
+  }
+  state.cardDiscard.push(...traded);
+
+  let bonus = classicTradeValue(state.classicTrades || 0);
+  state.classicTrades = (state.classicTrades || 0) + 1;
+  let ownedBonus = 0;
+  for (const tid of traded) {
+    if (state.territories[tid]?.owner === pid) {
+      state.territories[tid].armies += 2;
+      ownedBonus += 2;
+      log(state, `Bonus territorio: +2 su ${TERRITORIES[tid].name}.`);
+    }
+  }
+  state.reinforcementsRemaining += bonus;
+  log(
+    state,
+    `Scambi un set (+${bonus} rinforzi${ownedBonus ? `, +${ownedBonus} sui tuoi territori carta` : ''}).`,
+  );
+
+  if (state.pendingClassicDraw) {
+    state.pendingClassicDraw = false;
+    const r = drawCard(state, pid);
+    if (r?.cardId) {
+      log(state, `Pesci ${classicCardLogName(r.cardId)}.`);
+    } else if (r?.needsTrade) {
+      state.pendingClassicDraw = true;
+      log(state, 'Mano piena: scambia un altro set per pescare.');
+    }
+  }
+  return state;
+}
+
 function discardForDraw(state, action) {
   const pid = state.currentPlayerId;
   if (!state.pendingDrawAfterDiscard) return state;
@@ -965,4 +1085,4 @@ export function getContinents() {
   return CONTINENTS;
 }
 
-export { ADJACENCY, CARDS, RELICS, EVENTS, TERRITORIES, CONTINENTS, MISSIONS };
+export { ADJACENCY, CARDS, RELICS, EVENTS, TERRITORIES, CONTINENTS, MISSIONS, getClassicCard, isClassicCardId };

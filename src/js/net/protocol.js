@@ -31,6 +31,8 @@ export function handleNetMessage(ws, msg, send) {
       hostName: sanitizeName(msg.name),
       extraHumans: msg.extraHumans,
       aiCount: msg.aiCount,
+      vanillaMode: msg.vanillaMode,
+      drawEveryTurn: msg.drawEveryTurn,
       ws,
       id: msg.roomId,
     });

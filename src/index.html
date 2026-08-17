@@ -13,10 +13,119 @@
 </head>
 <body>
   <div id="app">
+    <div id="screen-home" class="flow-screen">
+      <div class="flow-card home-card">
+        <img class="home-logo" src="assets/logo-wordmark.png" alt="Krisiko" />
+        <button type="button" id="home-new" class="btn">Nuova partita</button>
+      </div>
+    </div>
+
+    <div id="screen-setup" class="flow-screen hidden">
+      <div class="flow-card setup-card">
+        <img class="setup-logo" id="setup-logo" src="assets/logo-wordmark.png" alt="Krisiko" />
+        <h2 class="flow-title">Nuova partita</h2>
+        <label class="setup-name-label">
+          Il tuo nome
+          <input type="text" id="setup-name" maxlength="20" placeholder="Giocatore" autocomplete="nickname" />
+        </label>
+        <div class="setup-field">
+          <span class="setup-label">Modalità</span>
+          <div class="setup-toggle" id="setup-modes">
+            <button type="button" id="setup-mode-local" class="btn setup-mode is-on">Locale</button>
+            <button type="button" id="setup-mode-online" class="btn btn-ghost setup-mode">Online</button>
+          </div>
+          <p class="setup-help" id="setup-mode-help">Questo browser: tu + IA.</p>
+        </div>
+        <div class="setup-field">
+          <span class="setup-label">Giocatori</span>
+          <p class="setup-help" id="setup-players-help">Tu + avversari IA (2–6 totali).</p>
+          <div class="lobby-stepper">
+            <button type="button" id="setup-ai-minus" class="btn btn-ghost lobby-step" aria-label="Meno IA">−</button>
+            <div class="lobby-ai-value">
+              <span id="setup-ai-count">1</span>
+              <span class="lobby-ai-label">IA</span>
+            </div>
+            <button type="button" id="setup-ai-plus" class="btn btn-ghost lobby-step" aria-label="Più IA">+</button>
+          </div>
+          <div id="setup-friends-wrap" class="hidden">
+            <div class="lobby-stepper">
+              <button type="button" id="setup-friends-minus" class="btn btn-ghost lobby-step" aria-label="Meno amici">−</button>
+              <div class="lobby-ai-value">
+                <span id="setup-friends-count">1</span>
+                <span class="lobby-ai-label">amici (link)</span>
+              </div>
+              <button type="button" id="setup-friends-plus" class="btn btn-ghost lobby-step" aria-label="Più amici">+</button>
+            </div>
+          </div>
+          <div class="lobby-slots" id="setup-slots"></div>
+          <p class="lobby-total" id="setup-total"></p>
+        </div>
+        <div class="setup-field setup-rules">
+          <span class="setup-label">Regole</span>
+          <label class="setup-switch-row">
+            <span>
+              <strong>Pesca ogni turno</strong>
+              <span class="setup-switch-desc">1 carta all’inizio turno, anche senza conquiste.</span>
+            </span>
+            <button type="button" id="setup-draw" class="setup-switch" aria-pressed="false">Off</button>
+          </label>
+          <label class="setup-switch-row">
+            <span>
+              <strong>Classico</strong>
+              <span class="setup-switch-desc">Risiko tradizionale: carte territorio, niente reliquie ed eventi Krisiko.</span>
+            </span>
+            <button type="button" id="setup-vanilla" class="setup-switch" aria-pressed="false">Off</button>
+          </label>
+        </div>
+        <p class="lobby-error hidden" id="setup-error"></p>
+        <div class="flow-actions">
+          <button type="button" id="setup-back" class="btn btn-ghost">Indietro</button>
+          <button type="button" id="setup-start" class="btn">Inizia</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="screen-join" class="flow-screen hidden">
+      <div class="flow-card setup-card">
+        <img class="setup-logo" src="assets/logo-wordmark.png" alt="Krisiko" />
+        <h2 class="flow-title">Entra nella stanza</h2>
+        <p class="setup-help">Scegli il tuo nome, poi conferma. Il link non porta il nome di chi ha creato la stanza.</p>
+        <label class="setup-name-label">
+          Il tuo nome
+          <input type="text" id="join-name" maxlength="20" placeholder="Giocatore" autocomplete="nickname" />
+        </label>
+        <p class="lobby-error hidden" id="join-error"></p>
+        <div class="flow-actions">
+          <button type="button" id="join-back" class="btn btn-ghost">Indietro</button>
+          <button type="button" id="join-confirm" class="btn">Conferma</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="screen-wait" class="flow-screen hidden">
+      <div class="flow-card setup-card">
+        <h2 class="flow-title">Stanza</h2>
+        <p class="setup-help">Stanza privata — entra solo chi ha il link. Chi crea la stanza deve tenere aperta la pagina.</p>
+        <div class="setup-rules-summary" id="wait-rules"></div>
+        <div class="lobby-link-row">
+          <input type="text" id="wait-link" readonly />
+          <button type="button" id="wait-copy" class="btn btn-ghost">Copia</button>
+        </div>
+        <div class="lobby-wait-seats" id="wait-seats"></div>
+        <p class="lobby-total" id="wait-hint"></p>
+        <p class="lobby-error hidden" id="wait-error"></p>
+        <div class="flow-actions">
+          <button type="button" id="wait-back" class="btn btn-ghost hidden">Indietro</button>
+          <button type="button" id="wait-begin" class="btn hidden">Inizia la partita</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="game-shell" class="hidden">
     <header class="topbar">
       <div class="brand">
         <h1>
-          <img src="assets/logo-wordmark.png" alt="Krisiko" />
+          <img id="game-logo" src="assets/logo-wordmark.png" alt="Krisiko" />
         </h1>
       </div>
       <div class="top-meta" id="top-meta"></div>
@@ -72,6 +181,7 @@
       </div>
       <div class="rail-backdrop" id="rail-backdrop"></div>
     </main>
+    </div>
 
     <div id="dice-overlay" class="dice-overlay hidden">
       <div class="dice-panel" id="dice-panel">
@@ -107,57 +217,6 @@
       </div>
     </div>
 
-    <div id="lobby" class="overlay">
-      <div class="modal lobby-modal">
-        <h2 id="lobby-title">Nuova partita</h2>
-        <div class="lobby-modes" id="lobby-modes">
-          <button type="button" id="lobby-mode-local" class="btn lobby-mode is-on">Locale</button>
-          <button type="button" id="lobby-mode-online" class="btn btn-ghost lobby-mode">Online</button>
-        </div>
-        <p class="lobby-lead hidden" id="lobby-join-lead">Scegli il tuo nome, poi conferma per entrare. Il link non porta il nome di chi ha creato la stanza.</p>
-        <label class="lobby-name-label">
-          Il tuo nome
-          <input type="text" id="lobby-name" maxlength="20" placeholder="Giocatore" autocomplete="nickname" />
-        </label>
-        <div id="lobby-setup">
-          <p class="lobby-lead" id="lobby-lead">Quanti avversari IA? Massimo 6 giocatori in totale.</p>
-          <div class="lobby-stepper">
-            <button type="button" id="lobby-ai-minus" class="btn btn-ghost lobby-step" aria-label="Meno IA">−</button>
-            <div class="lobby-ai-value">
-              <span id="lobby-ai-count">1</span>
-              <span class="lobby-ai-label" id="lobby-ai-label">IA</span>
-            </div>
-            <button type="button" id="lobby-ai-plus" class="btn btn-ghost lobby-step" aria-label="Più IA">+</button>
-          </div>
-          <div id="lobby-friends-wrap" class="hidden">
-            <div class="lobby-stepper">
-              <button type="button" id="lobby-friends-minus" class="btn btn-ghost lobby-step" aria-label="Meno amici">−</button>
-              <div class="lobby-ai-value">
-                <span id="lobby-friends-count">1</span>
-                <span class="lobby-ai-label">amici (link)</span>
-              </div>
-              <button type="button" id="lobby-friends-plus" class="btn btn-ghost lobby-step" aria-label="Più amici">+</button>
-            </div>
-          </div>
-          <div class="lobby-slots" id="lobby-slots"></div>
-          <p class="lobby-total" id="lobby-total"></p>
-        </div>
-        <p class="lobby-error hidden" id="lobby-error"></p>
-        <div id="lobby-wait" class="lobby-wait hidden">
-          <p class="lobby-lead">Stanza privata — entra solo chi ha il link. Chi crea la stanza deve tenere aperta la pagina.</p>
-          <div class="lobby-link-row">
-            <input type="text" id="lobby-link" readonly />
-            <button type="button" id="lobby-copy" class="btn btn-ghost">Copia</button>
-          </div>
-          <div class="lobby-wait-seats" id="lobby-wait-seats"></div>
-          <p class="lobby-total" id="lobby-wait-hint"></p>
-          <button type="button" id="lobby-begin" class="btn hidden">Inizia la partita</button>
-        </div>
-        <div class="lobby-actions">
-          <button type="button" id="lobby-cancel" class="btn btn-ghost hidden">Annulla</button>
-          <button type="button" id="lobby-start" class="btn">Inizia</button>
-        </div>
-      </div>
     </div>
 
     <div id="overlay" class="overlay hidden">
