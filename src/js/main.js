@@ -1,4 +1,5 @@
 import { createGame, applyAction, CARDS, TERRITORIES, areAdjacent, canFortifyBetween, PLAYER_SLOTS, MAX_PLAYERS } from './engine/game.js';
+import { isValidClassicSet } from './data/classic-cards.js';
 import { runAiTurn } from './ai/ai.js';
 import { renderMap, computeHighlights } from './ui/map.js';
 import { renderHud, renderActions } from './ui/hud.js';
@@ -14,6 +15,7 @@ const els = {
   screenWait: document.getElementById('screen-wait'),
   homeNew: document.getElementById('home-new'),
   setupLogo: document.getElementById('setup-logo'),
+  gameLogo: document.getElementById('game-logo'),
   setupName: document.getElementById('setup-name'),
   setupModeLocal: document.getElementById('setup-mode-local'),
   setupModeOnline: document.getElementById('setup-mode-online'),
@@ -90,9 +92,11 @@ const ui = {
   missionExpanded: false,
   expandedOpponentId: null,
   localPlayerId: null,
+  classicCardSelection: [],
   onCardClick: null,
   onEndPhase: null,
   onClearCombatCard: null,
+  onTradeClassic: null,
 };
 
 const AI_COUNT_KEY = 'krisiko.aiCount';
@@ -101,6 +105,8 @@ const NAME_KEY = 'krisiko.playerName';
 const MODE_KEY = 'krisiko.lobbyMode';
 const VANILLA_KEY = 'krisiko.vanillaMode';
 const DRAW_KEY = 'krisiko.drawEveryTurn';
+const LOGO_KRISIKO = 'assets/logo-wordmark.png';
+const LOGO_CLASSIC = 'assets/logo-vanilla-wordmark.png';
 const MAX_AI = MAX_PLAYERS - 1;
 let aiCount = loadAiCount();
 let extraHumans = loadExtraHumans();
@@ -187,8 +193,9 @@ function playerName(fromJoin = false) {
 }
 
 function rulesSummary({ vanilla, draw }) {
-  const bits = [vanilla ? 'Vanilla' : 'Krisiko'];
+  const bits = [vanilla ? 'Classico' : 'Krisiko'];
   if (!vanilla && draw) bits.push('pesca ogni turno');
+  if (vanilla) bits.push('carte territorio');
   return bits.map((b) => `<span class="pill">${b}</span>`).join('');
 }
 
@@ -229,10 +236,24 @@ function showWaitScreen() {
   clearFlowErrors();
 }
 
+function syncBrandLogo(classic) {
+  const src = classic ? LOGO_CLASSIC : LOGO_KRISIKO;
+  const alt = classic ? 'Risiko Classico' : 'Krisiko';
+  if (els.setupLogo) {
+    els.setupLogo.src = src;
+    els.setupLogo.alt = alt;
+  }
+  if (els.gameLogo) {
+    els.gameLogo.src = src;
+    els.gameLogo.alt = alt;
+  }
+}
+
 function enterGame() {
   showFlowScreen('game');
   clearFlowErrors();
   els.app?.classList.toggle('vanilla-mode', !!state?.vanillaMode);
+  syncBrandLogo(!!state?.vanillaMode);
 }
 
 function clearFlowErrors() {
@@ -264,9 +285,7 @@ function syncRuleToggles() {
     els.setupVanilla.setAttribute('aria-pressed', vanillaMode ? 'true' : 'false');
     els.setupVanilla.textContent = vanillaMode ? 'On' : 'Off';
   }
-  if (els.setupLogo) {
-    els.setupLogo.src = vanillaMode ? 'assets/logo-vanilla-wordmark.png' : 'assets/logo-wordmark.png';
-  }
+  syncBrandLogo(vanillaMode);
 }
 
 function renderWait(room) {
@@ -524,6 +543,7 @@ function joinOnlineRoom(roomId) {
 function resetUi() {
   ui.selectedId = null;
   ui.selectedCardIndex = null;
+  ui.classicCardSelection = [];
   ui.mode = null;
   ui.marchFrom = null;
   ui.missionExpanded = false;
@@ -631,6 +651,7 @@ function refresh() {
     return;
   }
   els.app?.classList.toggle('vanilla-mode', !!state.vanillaMode);
+  syncBrandLogo(!!state.vanillaMode);
   ui.highlightIds = computeHighlights(state, ui);
   renderMap(els.map, state, ui, onTerritoryClick);
   renderHud(els, state, ui);
@@ -661,6 +682,21 @@ function updateHint() {
     els.mapHint.textContent = 'Scarta una carta dalla mano per pescare.';
     return;
   }
+  if (state.vanillaMode && state.pendingClassicDraw) {
+    els.mapHint.textContent =
+      'Hai vinto una carta ma la mano è piena: in fase rinforzi seleziona 3 carte e scambia un set.';
+    return;
+  }
+  if (state.vanillaMode && state.phase === 'reinforce' && ui.classicCardSelection?.length) {
+    const n = ui.classicCardSelection.length;
+    els.mapHint.textContent =
+      n < 3
+        ? `Seleziona ${3 - n} carta/e per scambiare un set (3 uguali o 1 per simbolo).`
+        : isValidClassicSet(state.players[pid].hand, ui.classicCardSelection)
+          ? 'Set valido: premi «Scambia set» per rinforzi extra.'
+          : 'Combinazione non valida: serve 3 uguali o 1 Fante, 1 Cavallo, 1 Cannone.';
+    return;
+  }
   if (ui.mode === 'card_recruit') {
     els.mapHint.textContent = 'Scegli un tuo territorio per +2 armate.';
     return;
@@ -676,10 +712,20 @@ function updateHint() {
     return;
   }
   if (state.phase === 'reinforce') {
-    els.mapHint.textContent = `Clicca i tuoi territori per piazzare ${state.reinforcementsRemaining} rinforzi.`;
+    const tradeHint =
+      state.vanillaMode && state.players[pid].hand.length >= 3
+        ? ' Puoi scambiare set di 3 carte dalla mano.'
+        : '';
+    els.mapHint.textContent = `Clicca i tuoi territori per piazzare ${state.reinforcementsRemaining} rinforzi.${tradeHint}`;
     return;
   }
   if (state.phase === 'attack') {
+    if (state.vanillaMode) {
+      els.mapHint.textContent = ui.selectedId
+        ? `Attacca da ${TERRITORIES[ui.selectedId].name}: clicca un nemico adiacente.`
+        : 'Seleziona un tuo territorio con ≥2 armate, poi il bersaglio. Conquista = 1 carta territorio.';
+      return;
+    }
     const cardHint =
       ui.selectedCardIndex != null
         ? ` Carta combat selezionata: ${CARDS[state.players[pid].hand[ui.selectedCardIndex]]?.name}.`
@@ -851,6 +897,16 @@ function onTerritoryClick(id) {
 ui.onCardClick = (index, card) => {
   if (!isMyTurn()) return;
 
+  if (state.vanillaMode && card.type === 'classic') {
+    if (state.phase !== 'reinforce') return;
+    const sel = ui.classicCardSelection || (ui.classicCardSelection = []);
+    const pos = sel.indexOf(index);
+    if (pos >= 0) sel.splice(pos, 1);
+    else if (sel.length < 3) sel.push(index);
+    refresh();
+    return;
+  }
+
   if (state.pendingDrawAfterDiscard) {
     dispatch({ type: 'DISCARD_FOR_DRAW', handIndex: index });
     return;
@@ -881,11 +937,23 @@ ui.onCardClick = (index, card) => {
   refresh();
 };
 
+ui.onTradeClassic = () => {
+  if (!isMyTurn() || !state?.vanillaMode || state.phase !== 'reinforce') return;
+  const sel = ui.classicCardSelection;
+  if (!sel || sel.length !== 3) return;
+  if (!isValidClassicSet(state.players[state.currentPlayerId].hand, sel)) return;
+  dispatch({ type: 'TRADE_CLASSIC_CARDS', handIndices: [...sel] }, { ai: true });
+  ui.classicCardSelection = [];
+  ui.selectedCardIndex = null;
+  ui.mode = null;
+};
+
 ui.onEndPhase = () => {
   if (!isMyTurn()) return;
   dispatch({ type: 'END_PHASE' }, { ai: true });
   ui.selectedId = null;
   ui.selectedCardIndex = null;
+  ui.classicCardSelection = [];
   ui.mode = null;
 };
 
@@ -944,6 +1012,7 @@ function returnToHome() {
   history.replaceState(null, '', location.pathname);
   els.overlay.classList.add('hidden');
   els.app?.classList.remove('vanilla-mode');
+  syncBrandLogo(false);
   showHome();
 }
 

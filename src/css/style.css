@@ -905,9 +905,17 @@ html, body {
 }
 
 #app.vanilla-mode .tray-relic,
-#app.vanilla-mode .tray-hand-wrap,
 #app.vanilla-mode .event-card {
   display: none !important;
+}
+
+.card.classic .classic-symbol {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+.card.classic .cname {
+  font-size: 0.68rem;
+  color: var(--accent);
 }
 
 .modal {
