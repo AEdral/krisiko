@@ -30,6 +30,11 @@
     <main class="layout">
       <section class="map-panel">
         <svg id="map" viewBox="172 119 745 503" preserveAspectRatio="xMidYMid meet" aria-label="Mappa Krisiko"></svg>
+        <div class="map-zoom" role="group" aria-label="Zoom mappa">
+          <button type="button" id="map-zoom-in" class="btn btn-ghost" aria-label="Zoom avanti" title="Zoom avanti">+</button>
+          <button type="button" id="map-zoom-out" class="btn btn-ghost" aria-label="Zoom indietro" title="Zoom indietro">−</button>
+          <button type="button" id="map-zoom-reset" class="btn btn-ghost" aria-label="Tutta la mappa" title="Tutta la mappa">1×</button>
+        </div>
         <div class="map-hint" id="map-hint">Seleziona un territorio</div>
       </section>
 

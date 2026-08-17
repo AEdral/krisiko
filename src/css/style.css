@@ -124,6 +124,30 @@ html, body {
   width: 100%;
   height: 100%;
   display: block;
+  touch-action: none;
+  cursor: grab;
+}
+#map:active {
+  cursor: grabbing;
+}
+
+.map-zoom {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.55rem;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+.map-zoom .btn {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  font-size: 1.15rem;
+  line-height: 1;
+  background: rgba(6, 14, 18, 0.78);
 }
 
 .map-hint {
@@ -1183,8 +1207,14 @@ html, body {
       "hud";
   }
 
-  .map-panel {
-    grid-area: map;
+  .map-zoom {
+    top: 0.4rem;
+    left: 0.4rem;
+  }
+  .map-zoom .btn {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
   }
 
   .map-hint {

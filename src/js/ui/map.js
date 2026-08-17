@@ -3,6 +3,18 @@ import { MAP_VIEWBOX, TERRITORY_SHAPES } from '../data/shapes.js';
 import { areAdjacent } from '../engine/game.js';
 
 const NS = 'http://www.w3.org/2000/svg';
+const [BASE_X, BASE_Y, BASE_W, BASE_H] = MAP_VIEWBOX.split(/\s+/).map(Number);
+const MIN_SCALE = 1;
+const MAX_SCALE = 5;
+const ZOOM_STEP = 1.18;
+
+const cam = { x: BASE_X, y: BASE_Y, w: BASE_W, h: BASE_H };
+const pointers = new Map();
+let cameraBound = false;
+let suppressClick = false;
+let lastPan = null;
+let lastPinch = null;
+let dragged = false;
 
 function addSeaPath(layer, d, label) {
   const path = document.createElementNS(NS, 'path');
@@ -42,9 +54,147 @@ function drawSeaRoutes(world) {
   world.appendChild(seaLayer);
 }
 
+function applyCam(svg) {
+  svg.setAttribute('viewBox', `${cam.x} ${cam.y} ${cam.w} ${cam.h}`);
+}
+
+function svgPoint(svg, clientX, clientY) {
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return { x: cam.x + cam.w / 2, y: cam.y + cam.h / 2 };
+  const pt = svg.createSVGPoint();
+  pt.x = clientX;
+  pt.y = clientY;
+  const p = pt.matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+
+function clampCam() {
+  const s = Math.min(MAX_SCALE, Math.max(MIN_SCALE, BASE_W / cam.w));
+  cam.w = BASE_W / s;
+  cam.h = BASE_H / s;
+  cam.x = Math.min(BASE_X + BASE_W - cam.w, Math.max(BASE_X, cam.x));
+  cam.y = Math.min(BASE_Y + BASE_H - cam.h, Math.max(BASE_Y, cam.y));
+}
+
+function zoomAt(svg, clientX, clientY, factor) {
+  const p = svgPoint(svg, clientX, clientY);
+  const nextW = cam.w / factor;
+  const nextH = cam.h / factor;
+  cam.x = p.x - (p.x - cam.x) * (nextW / cam.w);
+  cam.y = p.y - (p.y - cam.y) * (nextH / cam.h);
+  cam.w = nextW;
+  cam.h = nextH;
+  clampCam();
+  applyCam(svg);
+}
+
+function zoomCenter(svg, factor) {
+  const r = svg.getBoundingClientRect();
+  zoomAt(svg, r.left + r.width / 2, r.top + r.height / 2, factor);
+}
+
+function resetCam(svg) {
+  cam.x = BASE_X;
+  cam.y = BASE_Y;
+  cam.w = BASE_W;
+  cam.h = BASE_H;
+  applyCam(svg);
+}
+
+function bindMapCamera(svg) {
+  if (cameraBound) return;
+  cameraBound = true;
+
+  svg.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      zoomAt(svg, e.clientX, e.clientY, e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
+    },
+    { passive: false },
+  );
+
+  svg.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try {
+      svg.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    dragged = false;
+    lastPinch = null;
+    lastPan = { x: e.clientX, y: e.clientY };
+  });
+
+  svg.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointers.size >= 2) {
+      const pts = [...pointers.values()];
+      const a = pts[0];
+      const b = pts[1];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const midX = (a.x + b.x) / 2;
+      const midY = (a.y + b.y) / 2;
+      if (lastPinch && lastPinch.dist > 0) {
+        zoomAt(svg, midX, midY, dist / lastPinch.dist);
+        dragged = true;
+      }
+      lastPinch = { dist };
+      lastPan = null;
+      return;
+    }
+
+    if (!lastPan) return;
+    const dx = e.clientX - lastPan.x;
+    const dy = e.clientY - lastPan.y;
+    if (Math.hypot(dx, dy) > 4) dragged = true;
+    const p0 = svgPoint(svg, lastPan.x, lastPan.y);
+    const p1 = svgPoint(svg, e.clientX, e.clientY);
+    cam.x -= p1.x - p0.x;
+    cam.y -= p1.y - p0.y;
+    clampCam();
+    applyCam(svg);
+    lastPan = { x: e.clientX, y: e.clientY };
+  });
+
+  const endPointer = (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.delete(e.pointerId);
+    lastPinch = null;
+    if (pointers.size === 0) {
+      lastPan = null;
+      if (dragged) {
+        suppressClick = true;
+        setTimeout(() => {
+          suppressClick = false;
+        }, 0);
+      }
+    } else {
+      const only = [...pointers.values()][0];
+      lastPan = { x: only.x, y: only.y };
+    }
+  };
+  svg.addEventListener('pointerup', endPointer);
+  svg.addEventListener('pointercancel', endPointer);
+
+  svg.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    zoomAt(svg, e.clientX, e.clientY, ZOOM_STEP * ZOOM_STEP);
+  });
+
+  const panel = svg.closest('.map-panel');
+  panel?.querySelector('#map-zoom-in')?.addEventListener('click', () => zoomCenter(svg, ZOOM_STEP));
+  panel?.querySelector('#map-zoom-out')?.addEventListener('click', () => zoomCenter(svg, 1 / ZOOM_STEP));
+  panel?.querySelector('#map-zoom-reset')?.addEventListener('click', () => resetCam(svg));
+}
+
 export function renderMap(svg, state, ui, onSelect) {
-  svg.setAttribute('viewBox', MAP_VIEWBOX);
+  bindMapCamera(svg);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  applyCam(svg);
   svg.innerHTML = '';
 
   const world = document.createElementNS(NS, 'g');
@@ -84,7 +234,14 @@ export function renderMap(svg, state, ui, onSelect) {
     title.textContent = `${meta.name} — ${owner.name} (${t.armies})`;
     g.appendChild(title);
 
-    g.addEventListener('click', () => onSelect(id));
+    g.addEventListener('click', (ev) => {
+      if (suppressClick) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+      onSelect(id);
+    });
     world.appendChild(g);
   }
 
