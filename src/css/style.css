@@ -1052,11 +1052,12 @@ html, body {
 }
 .lobby-link-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.35rem;
   margin: 0 0 0.75rem;
 }
 .lobby-link-row input {
-  flex: 1;
+  flex: 1 1 12rem;
   min-width: 0;
   font: inherit;
   font-size: 0.78rem;

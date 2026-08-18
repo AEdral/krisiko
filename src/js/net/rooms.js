@@ -109,15 +109,34 @@ export function createRoom({
   id: forcedId,
 }) {
   sweep();
-  if (rooms.size >= MAX_ROOMS) {
-    return { error: 'Troppe stanze attive, riprova tra poco.' };
-  }
   const counts = clampCounts(extraHumans, aiCount);
   const extra = counts.extraHumans;
   const ai = counts.aiCount;
   const humanSeats = 1 + extra;
   const total = humanSeats + ai;
   const id = (forcedId || newRoomId()).toLowerCase();
+  const existing = rooms.get(id);
+  if (existing) {
+    if (existing.hostClientId !== hostClientId) {
+      return { error: 'Questa stanza è già aperta da un altro host.' };
+    }
+    if (ws) {
+      ws.clientId = hostClientId;
+      ws.roomId = id;
+      existing.sockets.add(ws);
+    }
+    const hostSeat = existing.seats.find((s) => s.clientId === hostClientId);
+    if (hostSeat) {
+      hostSeat.connected = true;
+      if (hostName) hostSeat.name = hostName;
+    }
+    existing.lastActive = Date.now();
+    broadcastRoom(existing);
+    return { room: publicRoom(existing, hostClientId) };
+  }
+  if (rooms.size >= MAX_ROOMS) {
+    return { error: 'Troppe stanze attive, riprova tra poco.' };
+  }
   const seats = [];
   for (let i = 0; i < total; i++) {
     const slot = PLAYER_SLOTS[i];
