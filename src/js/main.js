@@ -4,7 +4,7 @@ import { runAiTurn } from './ai/ai.js';
 import { renderMap, computeHighlights } from './ui/map.js';
 import { renderHud, renderActions } from './ui/hud.js';
 import { showBattleDice } from './ui/dice.js';
-import { createNet, describeNetError } from './net/client.js';
+import { createNet, describeNetError, loadHostedRoom, saveHostedRoom, clearHostedRoom } from './net/client.js';
 
 const els = {
   app: document.getElementById('app'),
@@ -42,6 +42,7 @@ const els = {
   waitRules: document.getElementById('wait-rules'),
   waitLink: document.getElementById('wait-link'),
   waitCopy: document.getElementById('wait-copy'),
+  waitShare: document.getElementById('wait-share'),
   waitSeats: document.getElementById('wait-seats'),
   waitHint: document.getElementById('wait-hint'),
   waitError: document.getElementById('wait-error'),
@@ -275,6 +276,42 @@ function roomUrl(id) {
   return `${location.origin}${path}?room=${encodeURIComponent(id)}`;
 }
 
+async function copyWaitLink(fromCopyBtn) {
+  const link = els.waitLink?.value;
+  if (!link) return false;
+  try {
+    await navigator.clipboard.writeText(link);
+    if (fromCopyBtn && els.waitCopy) {
+      els.waitCopy.textContent = 'Copiato';
+      setTimeout(() => {
+        els.waitCopy.textContent = 'Copia';
+      }, 1200);
+    }
+    return true;
+  } catch {
+    els.waitLink?.select();
+    return false;
+  }
+}
+
+async function shareWaitLink() {
+  const link = els.waitLink?.value;
+  if (!link) return;
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: 'Krisiko',
+        text: 'Entra nella stanza',
+        url: link,
+      });
+      return;
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+    }
+  }
+  await copyWaitLink(true);
+}
+
 function syncRuleToggles() {
   if (els.setupDraw) {
     els.setupDraw.disabled = vanillaMode;
@@ -308,7 +345,9 @@ function renderWait(room) {
   const humansIn = room.seats.filter((s) => s.kind === 'human' && s.connected).length;
   const open = room.seats.filter((s) => s.kind === 'human' && !s.taken).length;
   const hostKeepOpen =
-    net.mode === 'p2p' && room.you.isHost ? ' Tieni aperta questa scheda: sei il server della stanza.' : '';
+    net.mode === 'p2p' && room.you.isHost
+      ? ' Per far entrare gli altri tieni aperta questa pagina; puoi chiuderla per inoltrare il link e rientrare dallo stesso indirizzo.'
+      : '';
   els.waitHint.textContent = room.you.isHost
     ? open
       ? `In attesa di ${open} giocator${open === 1 ? 'e' : 'i'}. I posti vuoti diventano IA se inizi.${hostKeepOpen}`
@@ -377,14 +416,33 @@ function clampOnlineCounts() {
 const net = createNet({
   error(message) {
     netWait = false;
+    if (!message) return;
     if (joiningRoomId && !onlineRoom) showFlowError('join', message);
     else if (onlineRoom?.status === 'lobby') showFlowError('wait', message);
     else showFlowError('setup', message);
     if (joiningRoomId && !onlineRoom) showJoinScreen();
     else if (onlineRoom?.status === 'lobby') showWaitScreen();
   },
+  waitingHost() {
+    showWaitScreen();
+    clearFlowErrors();
+    els.waitBegin?.classList.add('hidden');
+    els.waitBack?.classList.remove('hidden');
+    els.waitHint.textContent =
+      'In attesa dell’host. Riapre la stanza dallo stesso link; nel momento in cui entri la sua pagina deve essere aperta.';
+  },
   room(room) {
     clearFlowErrors();
+    if (room.you.isHost) {
+      saveHostedRoom({
+        roomId: room.id,
+        name: playerName(),
+        extraHumans: room.extraHumans,
+        aiCount: room.aiCount,
+        vanillaMode: room.vanillaMode,
+        drawEveryTurn: room.drawEveryTurn,
+      });
+    }
     renderWait(room);
     if (room.status === 'lobby') showWaitScreen();
     else if (room.status === 'playing' && !state) els.waitHint.textContent = 'Avvio…';
@@ -508,6 +566,35 @@ async function createOnlineRoom() {
   }
 }
 
+async function reclaimHostRoom(hosted) {
+  persistLobby();
+  showWaitScreen();
+  els.waitHint.textContent = 'Riapertura stanza…';
+  els.waitBegin.classList.add('hidden');
+  if (!(await ensureNet())) {
+    showSetup();
+    return;
+  }
+  try {
+    if (net.mode === 'p2p') {
+      await net.create({
+        name: hosted.name || playerName(),
+        extraHumans: hosted.extraHumans,
+        aiCount: hosted.aiCount,
+        vanillaMode: hosted.vanillaMode,
+        drawEveryTurn: hosted.drawEveryTurn,
+        roomId: hosted.roomId,
+      });
+      return;
+    }
+    await net.join({ roomId: hosted.roomId, name: hosted.name || playerName() });
+  } catch (err) {
+    if (/aborted/i.test(String(err?.message))) return;
+    showSetup();
+    showFlowError('setup', describeNetError(err));
+  }
+}
+
 async function confirmJoin() {
   const name = (els.joinName?.value || '').trim();
   if (!name) {
@@ -527,6 +614,7 @@ async function confirmJoin() {
   try {
     await net.join({ roomId: joinPendingId, name });
   } catch (err) {
+    if (/aborted/i.test(String(err?.message))) return;
     showJoinScreen();
     showFlowError('join', describeNetError(err));
   }
@@ -534,6 +622,19 @@ async function confirmJoin() {
 
 function joinOnlineRoom(roomId) {
   lobbyMode = 'online';
+  const hosted = loadHostedRoom();
+  if (hosted && hosted.roomId === roomId) {
+    extraHumans = hosted.extraHumans ?? extraHumans;
+    aiCount = hosted.aiCount ?? aiCount;
+    vanillaMode = !!hosted.vanillaMode;
+    drawEveryTurn = !vanillaMode && !!hosted.drawEveryTurn;
+    if (els.setupName && hosted.name) els.setupName.value = hosted.name;
+    joinPendingId = roomId;
+    joiningRoomId = null;
+    onlineRoom = null;
+    void reclaimHostRoom(hosted);
+    return;
+  }
   joinPendingId = roomId;
   joiningRoomId = null;
   onlineRoom = null;
@@ -1008,6 +1109,7 @@ function returnToHome() {
   onlineRoom = null;
   joiningRoomId = null;
   joinPendingId = null;
+  clearHostedRoom();
   net.close();
   history.replaceState(null, '', location.pathname);
   els.overlay.classList.add('hidden');
@@ -1031,28 +1133,25 @@ els.setupStart?.addEventListener('click', startSetup);
 els.joinBack?.addEventListener('click', () => {
   joinPendingId = null;
   joiningRoomId = null;
+  net.close();
   history.replaceState(null, '', location.pathname);
   showHome();
 });
 els.joinConfirm?.addEventListener('click', () => void confirmJoin());
 els.waitBack?.addEventListener('click', () => {
+  const wasHost = !!(onlineRoom?.you?.isHost || loadHostedRoom()?.roomId === joinPendingId);
+  if (wasHost) clearHostedRoom();
   net.close();
   onlineRoom = null;
-  showSetup();
+  joiningRoomId = null;
+  joinPendingId = null;
+  history.replaceState(null, '', location.pathname);
+  if (wasHost) showSetup();
+  else showHome();
 });
 els.waitBegin?.addEventListener('click', () => net.start());
-els.waitCopy?.addEventListener('click', async () => {
-  const link = els.waitLink.value;
-  try {
-    await navigator.clipboard.writeText(link);
-    els.waitCopy.textContent = 'Copiato';
-    setTimeout(() => {
-      els.waitCopy.textContent = 'Copia';
-    }, 1200);
-  } catch {
-    els.waitLink.select();
-  }
-});
+els.waitShare?.addEventListener('click', () => void shareWaitLink());
+els.waitCopy?.addEventListener('click', () => void copyWaitLink(true));
 
 els.setupMinus?.addEventListener('click', () => {
   const minAi = lobbyMode === 'online' ? 0 : 1;
