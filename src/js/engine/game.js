@@ -6,7 +6,7 @@ import {
   INITIAL_ARMIES_BY_PLAYERS,
 } from '../data/map.js';
 import { RELICS, RELIC_IDS } from '../data/relics.js';
-import { CARDS, createCardDeck } from '../data/cards.js';
+import { CARDS, createCardDeck, getCard, isHandPlayable, isCombatCard, combatCardNeedsDiePick, riderBonus } from '../data/cards.js';
 import {
   createClassicDeck,
   getClassicCard,
@@ -20,6 +20,44 @@ import {
 import { EVENTS, createEventDeck } from '../data/events.js';
 import { MISSIONS, MISSION_IDS, checkMission } from '../data/missions.js';
 import { createRng } from './rng.js';
+import {
+  STACK_WINDOW_MS,
+  initStackState,
+  isStackLocked,
+  canEndPhaseNow,
+  openResponseWindow,
+  resetWindowDeadline,
+  pauseResponseWindow,
+  resumeResponseWindow,
+  windowRemainingMs,
+  isWindowExpired,
+  pushStackEntry,
+  resolveStack,
+  canStartCast,
+  canRespondInstant,
+  canCastCombat,
+  isCounterCard,
+} from './stack.js';
+import {
+  getChoiceLegalActions,
+  resolveChoice,
+  beginArcanaDraft,
+  beginSurveilChoice,
+  beginScryChoice,
+  beginStealChoice,
+  beginSabotageChoice,
+  beginOmniscienceChoice,
+  beginTurncoatChoice,
+  beginDoubleMandateChoice,
+  applySurveilImmediate,
+  applyStealImmediate,
+  applySabotageImmediate,
+  applyOmniscienceImmediate,
+  applyTurncoatImmediate,
+  applyDoubleMandateImmediate,
+  applyArcanaImmediate,
+  autoResolveChoice,
+} from './choices.js';
 
 export const PHASES = ['setup', 'reinforce', 'attack', 'fortify', 'game_over'];
 export const BASE_HAND_SIZE = 5;
@@ -77,12 +115,37 @@ function nextSetupPlayerId(state, fromId) {
 
 export function getContinentBonus(state, playerId) {
   let bonus = 0;
+  const mult = playerHasRelic(state, playerId, 'continent_bonus_multiplier')
+    ? getRelicEffect(state, playerId).value ?? 1.5
+    : 1;
   for (const cont of Object.values(CONTINENTS)) {
     if (cont.territories.every((id) => state.territories[id].owner === playerId)) {
-      bonus += cont.bonus;
+      const b = mult === 1 ? cont.bonus : Math.floor(cont.bonus * mult);
+      bonus += b;
     }
   }
   return bonus;
+}
+
+function getExtraFortifyLimit(state, playerId) {
+  if (playerHasRelic(state, playerId, 'extra_fortify_moves')) {
+    return getRelicEffect(state, playerId).value ?? 2;
+  }
+  if (playerHasRelic(state, playerId, 'extra_fortify_move')) {
+    return getRelicEffect(state, playerId).value ?? 1;
+  }
+  return 0;
+}
+
+function canUseBastion(state, defenderId) {
+  if (!playerHasRelic(state, defenderId, 'bastion_defense')) return false;
+  const usedRound = state.players[defenderId].bastionUsedRound;
+  return usedRound == null || usedRound !== state.round;
+}
+
+function aiShouldUseBastion(state, defenderId, toId, attackDice) {
+  const armies = state.territories[toId]?.armies ?? 0;
+  return armies <= 2 || attackDice >= 2;
 }
 
 /** Per-continent ownership for UI. */
@@ -110,13 +173,29 @@ export function getContinentStatus(state, playerId) {
 
 export function playerHasRelic(state, playerId, effectType) {
   if (state.vanillaMode) return false;
-  const relicId = state.players[playerId].relicId;
-  return relicId && RELICS[relicId]?.effect?.type === effectType;
+  return !!findRelicIdWithEffect(state, playerId, effectType);
 }
 
 export function getRelicEffect(state, playerId) {
   const relicId = state.players[playerId].relicId;
   return relicId ? RELICS[relicId].effect : null;
+}
+
+function playerRelicIds(state, playerId) {
+  const p = state.players[playerId];
+  return [p.relicId, ...(p.extraRelicIds || [])].filter(Boolean);
+}
+
+function findRelicIdWithEffect(state, playerId, effectType) {
+  for (const id of playerRelicIds(state, playerId)) {
+    if (RELICS[id]?.effect?.type === effectType) return id;
+  }
+  return null;
+}
+
+function getRelicEffectByType(state, playerId, effectType) {
+  const id = findRelicIdWithEffect(state, playerId, effectType);
+  return id ? RELICS[id].effect : null;
 }
 
 export function getActiveEvent(state) {
@@ -198,6 +277,92 @@ function applyDieBonus(value, bonus) {
   return Math.min(6, Math.max(1, value + bonus));
 }
 
+function ensureDeckHasCards(state) {
+  if (state.cardDeck.length > 0) return;
+  if (state.cardDiscard.length === 0) return;
+  state.cardDeck = state.rng.shuffle(state.cardDiscard);
+  state.cardDiscard = [];
+}
+
+function peekDeckTop(state, n) {
+  ensureDeckHasCards(state);
+  const k = Math.min(n, state.cardDeck.length);
+  return state.cardDeck.slice(-k).reverse();
+}
+
+function takeDeckTop(state) {
+  ensureDeckHasCards(state);
+  if (state.cardDeck.length === 0) return null;
+  return state.cardDeck.pop();
+}
+
+function putDeckBottom(state, cardId) {
+  state.cardDeck.unshift(cardId);
+}
+
+function clearIsolationForPlayer(state, playerId) {
+  for (const [tid, lock] of Object.entries(state.isolatedTerritories || {})) {
+    if (lock.untilPlayerId === playerId) delete state.isolatedTerritories[tid];
+  }
+}
+
+function isTerritoryIsolated(state, territoryId) {
+  return !!state.isolatedTerritories?.[territoryId];
+}
+
+function pickOpponent(state, fromPlayerId, preferredId) {
+  if (preferredId && preferredId !== fromPlayerId && state.players[preferredId]) return preferredId;
+  const alive = getAlivePlayerIds(state).filter((id) => id !== fromPlayerId);
+  if (!alive.length) return null;
+  alive.sort((a, b) => state.players[b].hand.length - state.players[a].hand.length);
+  return alive[0];
+}
+
+function applyRider(state, playerId, card, action) {
+  if (!card.territoryId) return;
+  if (state.territories[card.territoryId]?.owner !== playerId) return;
+  const bonus = playerHasRelic(state, playerId, 'dominion_rider')
+    ? getRelicEffectByType(state, playerId, 'dominion_rider').bonus ?? 3
+    : 2;
+  const tid = action.riderTerritoryId || action.territoryId || card.territoryId;
+  if (state.territories[tid]?.owner === playerId) {
+    state.territories[tid].armies += bonus;
+    log(
+      state,
+      `Rider (${TERRITORIES[card.territoryId].name}): +${bonus} su ${TERRITORIES[tid].name}.`,
+    );
+  }
+}
+
+function drawCardsToHand(state, playerId, count) {
+  for (let i = 0; i < count; i++) {
+    const r = drawCard(state, playerId);
+    if (r?.pendingScry) break;
+    if (r?.cardId) log(state, `Pesci ${getCard(r.cardId).name}.`);
+    else if (r?.needsDiscard) {
+      state.pendingDrawAfterDiscard = true;
+      log(state, 'Mano piena: scarta 1 carta per pescare.');
+      break;
+    } else break;
+  }
+}
+
+function applyCombatCardEffect(state, card, attDice, defDice, isAttacker, dieIndex) {
+  const dice = isAttacker ? attDice : defDice;
+  const idx = dieIndex ?? 0;
+  if (card.effect.type === 'die_bonus') {
+    if (dice[idx] !== undefined) dice[idx] = applyDieBonus(dice[idx], card.effect.value);
+  } else if (card.effect.type === 'reroll_low' || card.effect.type === 'att_reroll_low') {
+    const ri = dieIndex ?? dice.length - 1;
+    if (dice[ri] !== undefined) {
+      dice[ri] = 1 + state.rng.int(6);
+      dice.sort((a, b) => b - a);
+    }
+  } else if (card.effect.type === 'att_high_die_bonus') {
+    attDice[0] = applyDieBonus(attDice[0], card.effect.value);
+  }
+}
+
 function maxAttackDice(state, armies) {
   let max = Math.min(3, armies - 1);
   const event = getActiveEvent(state);
@@ -246,6 +411,21 @@ function drawCard(state, playerId) {
     state.cardDeck = state.rng.shuffle(state.cardDiscard);
     state.cardDiscard = [];
   }
+
+  if (playerHasRelic(state, playerId, 'draw_scry') && state.cardDeck.length > 0) {
+    const topId = state.cardDeck[state.cardDeck.length - 1];
+    if (state.players[playerId].isHuman) {
+      beginScryChoice(state, playerId, topId, (msg) => log(state, msg));
+      return { pendingScry: true };
+    }
+    const topCard = getCard(topId);
+    log(state, `Veggente: cima del mazzo — ${topCard?.name || topId}.`);
+    if (state.rng.int(100) < 35) {
+      putDeckBottom(state, state.cardDeck.pop());
+      log(state, 'Veggente (IA): carta messa in fondo.');
+    }
+  }
+
   const cardId = state.cardDeck.pop();
   p.hand.push(cardId);
   return { cardId };
@@ -271,23 +451,39 @@ function ensureStartTurnEffects(state) {
 function beginPlayerTurn(state) {
   state.phase = 'reinforce';
   state.conqueredThisTurn = false;
+  state.conquersThisTurn = 0;
   state.attacksThisTurn = 0;
   state.fortifyUsed = false;
-  state.extraFortifyUsed = false;
+  state.extraFortifyRemaining = 0;
   state.pendingCombatCard = null;
   state.pendingInvasion = null;
   state.mustAttackSatisfied = false;
-  state.reinforcementsRemaining = computeReinforcements(state, state.currentPlayerId);
+  state.pendingRecycle = false;
+  const pid = state.currentPlayerId;
+  state.players[pid].redoubtUsedThisTurn = false;
+  state.players[pid].aggressorUsesThisTurn = 0;
+  state.players[pid].armiesLostThisTurn = 0;
+  clearIsolationForPlayer(state, pid);
+  state.extraFortifyRemaining = getExtraFortifyLimit(state, pid);
+  state.reinforcementsRemaining = computeReinforcements(state, pid);
   ensureStartTurnEffects(state);
-  const p = state.players[state.currentPlayerId];
+  const p = state.players[pid];
   log(state, `${p.name} — rinforzi: ${state.reinforcementsRemaining}.`);
+  if (
+    !state.vanillaMode &&
+    playerHasRelic(state, pid, 'start_turn_recycle') &&
+    p.hand.length > 0 &&
+    state.cardDeck.length + state.cardDiscard.length > 0
+  ) {
+    state.pendingRecycle = true;
+  }
   if (state.drawEveryTurn) {
     const result = drawCard(state, state.currentPlayerId);
     if (result?.needsDiscard) {
       state.pendingDrawAfterDiscard = true;
       log(state, 'Mano piena: scarta 1 carta per pescare.');
     } else if (result?.cardId) {
-      log(state, `Pesci ${CARDS[result.cardId].name}.`);
+      log(state, `Pesci ${getCard(result.cardId).name}.`);
     }
   }
 }
@@ -359,6 +555,11 @@ export function createGame(opts = {}) {
       missionTargetId: null,
       hand: [],
       setupRemaining: 0,
+      bastionUsedRound: null,
+      redoubtUsedThisTurn: false,
+      aggressorUsesThisTurn: 0,
+      armiesLostThisTurn: 0,
+      extraRelicIds: [],
     };
   }
 
@@ -374,6 +575,8 @@ export function createGame(opts = {}) {
       players[pid].missionTargetId = others.length ? rng.pick(others) : null;
     }
   });
+
+  const missionDeck = missionPool.slice(playerCount);
 
   const shuffledTerr = rng.shuffle(TERRITORY_IDS);
   const territories = {};
@@ -403,12 +606,16 @@ export function createGame(opts = {}) {
     phase: 'setup',
     reinforcementsRemaining: 0,
     conqueredThisTurn: false,
+    conquersThisTurn: 0,
     attacksThisTurn: 0,
     fortifyUsed: false,
-    extraFortifyUsed: false,
+    extraFortifyRemaining: 0,
     mustAttackSatisfied: false,
     pendingCombatCard: null,
     pendingInvasion: null,
+    pendingBastion: null,
+    pendingRecycle: false,
+    isolatedTerritories: {},
     vanillaMode,
     drawEveryTurn,
     cardDeck: vanillaMode ? createClassicDeck(rng) : createCardDeck(rng),
@@ -420,7 +627,15 @@ export function createGame(opts = {}) {
     winnerId: null,
     lastBattle: null,
     log: [],
+    stack: [],
+    responseWindow: null,
+    pendingCast: null,
+    combatContext: null,
+    stackSeq: 0,
+    missionDeck: vanillaMode ? [] : missionDeck,
+    pendingChoice: null,
   };
+  initStackState(state);
 
   const modeBits = [
     vanillaMode ? 'Classico' : 'Krisiko',
@@ -471,83 +686,181 @@ export function viewForPlayer(state, viewerId) {
     p.missionTargetId = null;
     p.hand = Array.isArray(p.hand) ? p.hand.map(() => 'hidden') : [];
   }
+  if (snap.pendingCast && snap.pendingCast.playerId !== viewerId) {
+    snap.pendingCast = {
+      playerId: snap.pendingCast.playerId,
+      kind: snap.pendingCast.kind,
+      hidden: true,
+    };
+  }
   return snap;
 }
 
-export function getLegalActions(state) {
+export function getLegalActions(state, actingPlayerId = null) {
   if (state.phase === 'game_over') return [];
-  const pid = state.currentPlayerId;
+
+  const turnPid = state.currentPlayerId;
+  const actor = actingPlayerId ?? turnPid;
+
+  if (state.pendingBastion) {
+    if (actor === state.pendingBastion.defenderId) {
+      return [
+        { type: 'RESOLVE_BASTION', use: true },
+        { type: 'RESOLVE_BASTION', use: false },
+      ];
+    }
+    return [];
+  }
+
+  if (state.pendingChoice) {
+    return getChoiceLegalActions(state, actor);
+  }
+
   const actions = [];
 
+  if (actor === turnPid && state.pendingInvasion) {
+    actions.push({ type: 'CONFIRM_INVASION' });
+    return actions;
+  }
+
+  if (actor === turnPid && state.pendingDrawAfterDiscard) {
+    const hand = state.players[turnPid].hand;
+    for (let i = 0; i < hand.length; i++) {
+      actions.push({ type: 'DISCARD_FOR_DRAW', handIndex: i });
+    }
+    return actions;
+  }
+
+  if (actor === turnPid && state.pendingRecycle && !state.vanillaMode) {
+    actions.push({ type: 'SKIP_RECYCLE' });
+    for (let i = 0; i < state.players[turnPid].hand.length; i++) {
+      actions.push({ type: 'RECYCLE_CARD', handIndex: i });
+    }
+  }
+
   if (state.phase === 'setup') {
-    if (state.players[pid].setupRemaining > 0) {
-      for (const tid of getPlayerTerritories(state, pid)) {
+    if (actor === turnPid && state.players[turnPid].setupRemaining > 0) {
+      for (const tid of getPlayerTerritories(state, turnPid)) {
         actions.push({ type: 'PLACE_REINFORCEMENT', territoryId: tid });
       }
     }
     return actions;
   }
 
-  if (state.phase === 'reinforce') {
-    if (state.reinforcementsRemaining > 0) {
-      for (const tid of getPlayerTerritories(state, pid)) {
-        actions.push({ type: 'PLACE_REINFORCEMENT', territoryId: tid });
+  if (actor === turnPid) {
+    if (state.phase === 'reinforce') {
+      if (state.reinforcementsRemaining > 0) {
+        for (const tid of getPlayerTerritories(state, turnPid)) {
+          actions.push({ type: 'PLACE_REINFORCEMENT', territoryId: tid });
+        }
+      } else if (canEndPhaseNow(state)) {
+        actions.push({ type: 'END_PHASE' });
       }
-    } else {
-      actions.push({ type: 'END_PHASE' });
+      if (state.vanillaMode) {
+        const set = findClassicTradeSet(state.players[turnPid].hand);
+        if (set) actions.push({ type: 'TRADE_CLASSIC_CARDS', handIndices: set });
+      }
     }
-    if (state.vanillaMode) {
-      const set = findClassicTradeSet(state.players[pid].hand);
-      if (set) actions.push({ type: 'TRADE_CLASSIC_CARDS', handIndices: set });
-    }
-  }
 
-  if (state.phase === 'attack') {
-    actions.push({ type: 'END_PHASE' });
-    for (const from of getPlayerTerritories(state, pid)) {
-      if (state.territories[from].armies < 2) continue;
-      for (const to of ADJACENCY[from]) {
-        if (state.territories[to].owner !== pid) {
-          actions.push({ type: 'ATTACK', from, to, attackDice: Math.min(3, state.territories[from].armies - 1) });
+    if (state.phase === 'attack') {
+      if (canEndPhaseNow(state)) actions.push({ type: 'END_PHASE' });
+      if (!state.responseWindow && !state.combatContext) {
+        for (const from of getPlayerTerritories(state, turnPid)) {
+          if (state.territories[from].armies < 2) continue;
+          if (isTerritoryIsolated(state, from)) continue;
+          for (const to of ADJACENCY[from]) {
+            if (state.territories[to].owner !== turnPid) {
+              actions.push({
+                type: 'ATTACK',
+                from,
+                to,
+                attackDice: Math.min(3, state.territories[from].armies - 1),
+              });
+            }
+          }
         }
       }
     }
-  }
 
-  if (state.phase === 'fortify') {
-    actions.push({ type: 'END_PHASE' });
-    const canMain = !state.fortifyUsed;
-    const canExtra =
-      playerHasRelic(state, pid, 'extra_fortify_move') &&
-      state.fortifyUsed &&
-      !state.extraFortifyUsed;
-    if (canMain || canExtra) {
-      const maxMove = canExtra ? 1 : 999;
-      for (const from of getPlayerTerritories(state, pid)) {
-        if (state.territories[from].armies < 2) continue;
-        for (const to of getPlayerTerritories(state, pid)) {
-          if (from === to) continue;
-          if (!canFortifyBetween(state, from, to)) continue;
-          const max = Math.min(maxMove, state.territories[from].armies - 1);
-          for (let n = 1; n <= max && n <= 5; n++) {
-            actions.push({ type: 'FORTIFY', from, to, armies: n });
+    if (state.phase === 'fortify') {
+      if (canEndPhaseNow(state)) actions.push({ type: 'END_PHASE' });
+      const canMain = !state.fortifyUsed;
+      const canExtra = state.fortifyUsed && state.extraFortifyRemaining > 0;
+      if (canMain || canExtra) {
+        const maxMove = canExtra ? 1 : 999;
+        for (const from of getPlayerTerritories(state, turnPid)) {
+          if (state.territories[from].armies < 2) continue;
+          for (const to of getPlayerTerritories(state, turnPid)) {
+            if (from === to) continue;
+            if (!canFortifyBetween(state, from, to)) continue;
+            const max = Math.min(maxMove, state.territories[from].armies - 1);
+            for (let n = 1; n <= max && n <= 5; n++) {
+              actions.push({ type: 'FORTIFY', from, to, armies: n });
+            }
           }
         }
       }
     }
   }
 
-  // Krisiko action cards (not in classico)
   if (state.vanillaMode) return actions;
-  for (let i = 0; i < state.players[pid].hand.length; i++) {
-    const cardId = state.players[pid].hand[i];
-    const card = CARDS[cardId];
-    if (card.type !== 'action') continue;
-    if (!card.phases.includes(state.phase)) continue;
-    actions.push({ type: 'PLAY_ACTION_CARD', handIndex: i, cardId });
-  }
-
+  actions.push(...getStackActions(state, actor));
   return actions;
+}
+
+/** Server / online validation: can this player send this action now? */
+export function isActionAllowed(state, playerId, action) {
+  if (!action?.type || state.phase === 'game_over') return false;
+  if (action.type === 'TICK_STACK') return false;
+
+  const legal = getLegalActions(state, playerId);
+
+  switch (action.type) {
+    case 'CAST_START':
+      return legal.some((a) => a.type === 'CAST_START' && a.handIndex === action.handIndex);
+    case 'CAST_CONFIRM':
+    case 'CAST_CANCEL':
+      return state.pendingCast?.playerId === playerId;
+    case 'SET_CAST_DIE':
+      return (
+        state.pendingCast?.playerId === playerId &&
+        state.pendingCast.needsDiePick &&
+        Number.isInteger(action.dieIndex)
+      );
+    case 'PASS_STACK':
+      return legal.some((a) => a.type === 'PASS_STACK');
+    case 'PLAY_ACTION_CARD':
+      return legal.some((a) => a.type === 'CAST_START' && a.handIndex === action.handIndex);
+    case 'ATTACK':
+      return legal.some(
+        (a) => a.type === 'ATTACK' && a.from === action.from && a.to === action.to,
+      );
+    case 'FORTIFY':
+      return legal.some(
+        (a) =>
+          a.type === 'FORTIFY' &&
+          a.from === action.from &&
+          a.to === action.to &&
+          (action.armies == null || a.armies === action.armies),
+      );
+    case 'PLACE_REINFORCEMENT':
+      return legal.some(
+        (a) => a.type === 'PLACE_REINFORCEMENT' && a.territoryId === action.territoryId,
+      );
+    case 'CONFIRM_INVASION':
+    case 'RESOLVE_BASTION':
+    case 'SKIP_RECYCLE':
+    case 'END_PHASE':
+    case 'TRADE_CLASSIC_CARDS':
+      return legal.some((a) => a.type === action.type);
+    case 'DISCARD_FOR_DRAW':
+    case 'RECYCLE_CARD':
+      return legal.some(
+        (a) => a.type === action.type && a.handIndex === action.handIndex,
+      );
+    default:
+      return legal.some((a) => a.type === action.type);
+  }
 }
 
 /**
@@ -556,11 +869,28 @@ export function getLegalActions(state) {
 export function applyAction(state, action) {
   if (state.phase === 'game_over') return state;
 
+  if (!state.vanillaMode && state.responseWindow) {
+    const allowed = ['CAST_START', 'CAST_CONFIRM', 'CAST_CANCEL', 'TICK_STACK', 'RESOLVE_BASTION', 'PASS_STACK', 'SET_CAST_DIE'];
+    if (!allowed.includes(action.type)) {
+      return state;
+    }
+  }
+  if (!state.vanillaMode && state.pendingCast) {
+    const allowed = ['CAST_CONFIRM', 'CAST_CANCEL', 'TICK_STACK', 'RESOLVE_BASTION', 'SET_CAST_DIE'];
+    if (!allowed.includes(action.type)) {
+      return state;
+    }
+  }
+
   if (state.pendingInvasion && action.type !== 'CONFIRM_INVASION') {
     if (action.type !== 'SET_COMBAT_CARD') {
       log(state, 'Completa prima lo spostamento nella zona conquistata.');
       return state;
     }
+  }
+
+  if (state.pendingChoice && action.type !== 'RESOLVE_CHOICE' && action.type !== 'RESOLVE_ARCANA') {
+    return state;
   }
 
   switch (action.type) {
@@ -574,8 +904,32 @@ export function applyAction(state, action) {
       return fortify(state, action);
     case 'CONFIRM_INVASION':
       return confirmInvasion(state, action);
+    case 'RESOLVE_BASTION':
+      return resolveBastionChoice(state, action);
+    case 'RESOLVE_ARCANA':
+    case 'RESOLVE_CHOICE':
+      return resolveChoiceAction(state, action);
+    case 'RECYCLE_CARD':
+      return recycleCard(state, action);
+    case 'SKIP_RECYCLE':
+      return skipRecycle(state);
+    case 'CAST_START':
+      return castStart(state, action);
+    case 'CAST_CONFIRM':
+      return castConfirm(state, action);
+    case 'CAST_CANCEL':
+      return castCancel(state, action);
+    case 'TICK_STACK':
+      return tickStack(state, action);
+    case 'PASS_STACK':
+      return passStack(state, action);
+    case 'SET_CAST_DIE':
+      if (state.pendingCast?.playerId === (action.playerId || state.pendingCast.playerId)) {
+        state.pendingCast.targets = { ...state.pendingCast.targets, dieIndex: action.dieIndex };
+      }
+      return state;
     case 'PLAY_ACTION_CARD':
-      return playActionCard(state, action);
+      return castStart(state, action);
     case 'SET_COMBAT_CARD':
       state.pendingCombatCard = action.handIndex ?? null;
       return state;
@@ -634,6 +988,11 @@ function endPhase(state) {
   const pid = state.currentPlayerId;
   const event = getActiveEvent(state);
 
+  if (!canEndPhaseNow(state)) {
+    log(state, 'Chiudi lo stack prima di avanzare fase.');
+    return state;
+  }
+
   if (state.pendingInvasion) {
     log(state, 'Completa prima lo spostamento nella zona conquistata.');
     return state;
@@ -644,6 +1003,7 @@ function endPhase(state) {
       log(state, 'Devi piazzare tutti i rinforzi.');
       return state;
     }
+    if (state.pendingRecycle) state.pendingRecycle = false;
     state.phase = 'attack';
     log(state, 'Fase attacco.');
     return state;
@@ -689,9 +1049,22 @@ function endPhase(state) {
         } else if (result?.cardId) {
           log(
             state,
-            `Pesci ${state.vanillaMode ? classicCardLogName(result.cardId) : CARDS[result.cardId].name}.`,
+            `Pesci ${state.vanillaMode ? classicCardLogName(result.cardId) : getCard(result.cardId).name}.`,
           );
         }
+      }
+    }
+    if (
+      !state.vanillaMode &&
+      playerHasRelic(state, pid, 'conquest_draw_bonus') &&
+      state.conquersThisTurn >= (getRelicEffect(state, pid).minConquers ?? 2)
+    ) {
+      const result = drawCard(state, pid);
+      if (result?.needsDiscard) {
+        state.pendingDrawAfterDiscard = true;
+        log(state, 'Sete di conquista: mano piena — scarta 1 carta per pescare.');
+      } else if (result?.cardId) {
+        log(state, `Sete di conquista: pesci ${getCard(result.cardId).name}.`);
       }
     }
     state.phase = 'fortify';
@@ -728,10 +1101,594 @@ function endTurn(state) {
   return state;
 }
 
+function stackNow(action) {
+  return typeof action?.nowMs === 'number' ? action.nowMs : Date.now();
+}
+
+function playerName(state, pid) {
+  return state.players[pid]?.name || pid;
+}
+
+function choiceDeps(state) {
+  return {
+    log: (msg) => log(state, msg),
+    playerName: (id) => playerName(state, id),
+    handLimit: (st, pid) => handLimit(st, pid),
+    putDeckBottom,
+    revealEvent,
+    pickOpponent,
+  };
+}
+
+function resolveChoiceAction(state, action) {
+  resolveChoice(state, action, choiceDeps(state));
+  return state;
+}
+
+/** AI / auto-resolve interactive choice prompts. */
+export function processChoiceDraft(state) {
+  if (!state.pendingChoice) return false;
+  if (state.players[state.pendingChoice.actorId]?.isHuman) return false;
+  autoResolveChoice(state, choiceDeps(state));
+  return true;
+}
+
+function isAlertProtected(state, playerId) {
+  return playerHasRelic(state, playerId, 'immune_negate_swoop');
+}
+
+function applyCardEffect(state, pid, card, action) {
+  switch (card.effect.type) {
+    case 'add_armies': {
+      if (card.effect.split) {
+        const tid = action.territoryId ?? getPlayerTerritories(state, pid)[0];
+        if (state.territories[tid]?.owner === pid) {
+          state.territories[tid].armies += card.effect.value;
+          log(state, `${card.name}: +${card.effect.value} su ${TERRITORIES[tid].name}.`);
+        }
+      } else {
+        const tid = action.territoryId ?? getPlayerTerritories(state, pid)[0];
+        if (state.territories[tid]?.owner === pid) {
+          state.territories[tid].armies += card.effect.value;
+          log(state, `${card.name}: +${card.effect.value} su ${TERRITORIES[tid].name}.`);
+        }
+      }
+      break;
+    }
+    case 'free_move': {
+      const from = action.from;
+      const to = action.to;
+      const n = Math.min(action.armies ?? card.effect.value, card.effect.value);
+      const adjacentOk = !card.effect.adjacent || areAdjacent(from, to);
+      if (
+        from &&
+        to &&
+        adjacentOk &&
+        state.territories[from]?.owner === pid &&
+        state.territories[to]?.owner === pid &&
+        state.territories[from].armies - n >= 1 &&
+        n >= 1
+      ) {
+        state.territories[from].armies -= n;
+        state.territories[to].armies += n;
+        log(state, `${card.name}: ${n} armate spostate.`);
+      }
+      break;
+    }
+    case 'teleport_move': {
+      const from = action.from;
+      const to = action.to;
+      const n = action.armies ?? Math.max(1, (state.territories[from]?.armies || 1) - 1);
+      if (
+        from &&
+        to &&
+        from !== to &&
+        state.territories[from]?.owner === pid &&
+        state.territories[to]?.owner === pid &&
+        state.territories[from].armies - n >= 1
+      ) {
+        state.territories[from].armies -= n;
+        state.territories[to].armies += n;
+        log(state, `${card.name}: ${n} armate teletrasportate.`);
+      }
+      break;
+    }
+    case 'draw':
+      drawCardsToHand(state, pid, card.effect.value);
+      break;
+    case 'surveil': {
+      ensureDeckHasCards(state);
+      const seen = peekDeckTop(state, card.effect.look);
+      const take = Math.min(
+        card.effect.take,
+        seen.length,
+        handLimit(state, pid) - state.players[pid].hand.length,
+      );
+      if (!seen.length || take <= 0) break;
+      const deps = choiceDeps(state);
+      if (
+        beginSurveilChoice(state, pid, card, seen, take, (msg) => log(state, msg))
+      ) {
+        break;
+      }
+      applySurveilImmediate(state, pid, seen, take, deps);
+      break;
+    }
+    case 'sabotage_discard': {
+      if (beginSabotageChoice(state, pid, card, (msg) => log(state, msg))) break;
+      applySabotageImmediate(state, pid, card, action, choiceDeps(state));
+      break;
+    }
+    case 'steal_card': {
+      if (beginStealChoice(state, pid, card, (msg) => log(state, msg))) break;
+      applyStealImmediate(state, pid, card, action, choiceDeps(state));
+      break;
+    }
+    case 'isolation': {
+      const tid = action.territoryId;
+      if (tid && state.territories[tid]) {
+        state.isolatedTerritories[tid] = { untilPlayerId: pid };
+        log(state, `${card.name}: ${TERRITORIES[tid].name} isolato.`);
+      }
+      break;
+    }
+    case 'betrayal': {
+      const tid = action.territoryId;
+      const t = state.territories[tid];
+      if (t && t.owner !== pid && t.armies === 1) {
+        t.owner = pid;
+        log(state, `${card.name}: conquisti ${TERRITORIES[tid].name}!`);
+        checkVictory(state);
+      }
+      break;
+    }
+    case 'plague':
+      for (const tid of Object.keys(state.territories)) {
+        const t = state.territories[tid];
+        if (t.armies <= 2) continue;
+        let loss = Math.floor(t.armies / 3);
+        t.armies = Math.max(1, t.armies - loss);
+      }
+      log(state, `${card.name}: −⅓ armate (min 1).`);
+      break;
+    case 'omniscience':
+      if (beginOmniscienceChoice(state, pid, card, (msg) => log(state, msg))) break;
+      applyOmniscienceImmediate(state, pid, card, choiceDeps(state));
+      break;
+    case 'resurrection':
+      for (const oid of getAlivePlayerIds(state)) {
+        const n = state.players[oid].armiesLostThisTurn || 0;
+        if (n <= 0) continue;
+        const tid = getPlayerTerritories(state, oid)[0];
+        if (tid) {
+          state.territories[tid].armies += n;
+          log(state, `${card.name}: ${state.players[oid].name} +${n}.`);
+        }
+      }
+      break;
+    case 'chaos_events':
+      revealEvent(state);
+      log(state, `${card.name}: nuovo evento.`);
+      break;
+    case 'arcana':
+      if (!beginArcanaDraft(state, pid, (msg) => log(state, msg))) {
+        applyArcanaImmediate(state, pid, choiceDeps(state));
+      }
+      break;
+    case 'turncoat':
+      if (beginTurncoatChoice(state, pid, card, (msg) => log(state, msg))) break;
+      applyTurncoatImmediate(state, pid, card, choiceDeps(state));
+      break;
+    case 'double_mandate':
+      if (beginDoubleMandateChoice(state, pid, card, (msg) => log(state, msg))) break;
+      applyDoubleMandateImmediate(state, pid, card, choiceDeps(state));
+      break;
+    default:
+      break;
+  }
+}
+
+function applyStackEntry(state, entry) {
+  const card = getCard(entry.cardId);
+  if (!card) return;
+  const pid = entry.playerId;
+  const targets = entry.targets || {};
+
+  if (entry.kind === 'combat' && state.combatContext) {
+    if (!state.combatContext.pendingCombatCards) state.combatContext.pendingCombatCards = [];
+    state.combatContext.pendingCombatCards.push({ entry, card, pid });
+    state.cardDiscard.push(entry.cardId);
+    log(state, `${playerName(state, pid)}: ${card.name} (combattimento).`);
+    return;
+  }
+
+  applyRider(state, pid, card, targets);
+  applyCardEffect(state, pid, card, targets);
+  state.cardDiscard.push(entry.cardId);
+}
+
+function runStackResolution(state) {
+  resolveStack(state, {
+    applyEntry: (entry) => applyStackEntry(state, entry),
+    discardEntry: (entry) => state.cardDiscard.push(entry.cardId),
+    isAlertProtected: (playerId) => isAlertProtected(state, playerId),
+    giveCardToPlayer: (playerId, cardId) => {
+      const lim = handLimit(state, playerId);
+      if (state.players[playerId].hand.length >= lim) {
+        state.cardDiscard.push(cardId);
+        log(state, 'Mano piena: carta sciacallo scartata.');
+      } else {
+        state.players[playerId].hand.push(cardId);
+      }
+    },
+    log: (msg) => log(state, msg),
+    playerName: (id) => playerName(state, id),
+  });
+}
+
+function passStack(state, action) {
+  if (!state.responseWindow || state.pendingCast) return state;
+  const pid = action.playerId;
+  if (!state.playerOrder.includes(pid)) return state;
+  const passed = state.responseWindow.passedPlayerIds || [];
+  if (passed.includes(pid)) return state;
+  passed.push(pid);
+  state.responseWindow.passedPlayerIds = passed;
+  log(state, `${playerName(state, pid)} passa.`);
+  const alive = getAlivePlayerIds(state);
+  if (alive.every((id) => passed.includes(id))) {
+    log(state, 'Tutti passano — finestra chiusa.');
+    return closeResponseWindow(state, stackNow(action));
+  }
+  return state;
+}
+
+function closeResponseWindow(state, nowMs) {
+  if (!state.responseWindow) return state;
+  runStackResolution(state);
+  state.responseWindow = null;
+  if (state.combatContext) {
+    finishCombatFromContext(state);
+  }
+  return state;
+}
+
+export function tickStack(state, action = {}) {
+  if (state.vanillaMode) return state;
+  const nowMs = stackNow(action);
+  if (state.pendingCast) return state;
+  if (!isWindowExpired(state, nowMs)) return state;
+  log(state, 'Finestra stack chiusa.');
+  return closeResponseWindow(state, nowMs);
+}
+
+function pushCastToStack(state, actor, card, handIndex, targets, nowMs) {
+  if (state.players[actor].hand[handIndex] !== card.id) return false;
+  state.players[actor].hand.splice(handIndex, 1);
+  pushStackEntry(state, {
+    playerId: actor,
+    cardId: card.id,
+    kind: card.timing,
+    targets: targets || {},
+  });
+
+  if (card.timing === 'action') {
+    if (!state.responseWindow) openResponseWindow(state, 'action_response', nowMs);
+    else resetWindowDeadline(state, nowMs);
+  } else if (state.responseWindow) {
+    resetWindowDeadline(state, nowMs);
+  }
+  if (state.responseWindow) resumeResponseWindow(state, nowMs);
+  log(state, `${playerName(state, actor)} lancia ${card.name}.`);
+  return true;
+}
+
+function castStart(state, action) {
+  const nowMs = stackNow(action);
+  const actor = action.playerId || state.currentPlayerId;
+  const handIndex = action.handIndex;
+  const cardId = state.players[actor].hand[handIndex];
+  const card = getCard(cardId);
+  if (!card || !canStartCast(state, actor, card)) return state;
+  if (state.pendingCast) return state;
+
+  const targets = {
+    territoryId: action.territoryId,
+    from: action.from,
+    to: action.to,
+    armies: action.armies,
+    riderTerritoryId: action.riderTerritoryId,
+    targetPlayerId: action.targetPlayerId,
+  };
+
+  if (card.timing === 'action') {
+    pushCastToStack(state, actor, card, handIndex, targets, nowMs);
+    return state;
+  }
+
+  state.pendingCast = {
+    playerId: actor,
+    cardId,
+    handIndex,
+    kind: card.timing,
+    targets,
+    needsDiePick: combatCardNeedsDiePick(card) && !!state.combatContext,
+  };
+  if (state.responseWindow) pauseResponseWindow(state, nowMs);
+  return state;
+}
+
+function castConfirm(state, action) {
+  const nowMs = stackNow(action);
+  const actor = action.playerId || state.pendingCast?.playerId;
+  if (!state.pendingCast || state.pendingCast.playerId !== actor) return state;
+  const pc = state.pendingCast;
+  const card = getCard(pc.cardId);
+  if (!card || state.players[actor].hand[pc.handIndex] !== pc.cardId) {
+    state.pendingCast = null;
+    if (state.responseWindow) resumeResponseWindow(state, nowMs);
+    return state;
+  }
+  if (pc.needsDiePick && pc.targets.dieIndex == null && action.dieIndex == null) return state;
+  const targets = { ...pc.targets };
+  if (action.dieIndex != null) targets.dieIndex = action.dieIndex;
+
+  state.pendingCast = null;
+  pushCastToStack(state, actor, card, pc.handIndex, targets, nowMs);
+  return state;
+}
+
+function castCancel(state, action) {
+  const nowMs = stackNow(action);
+  const actor = action.playerId || state.pendingCast?.playerId;
+  if (!state.pendingCast || state.pendingCast.playerId !== actor) return state;
+  state.pendingCast = null;
+  if (state.responseWindow) resumeResponseWindow(state, nowMs);
+  log(state, 'Lancio annullato.');
+  return state;
+}
+
+function finishCombatFromContext(state) {
+  const ctx = state.combatContext;
+  if (!ctx) return;
+  const pid = ctx.attackerId;
+  const defPid = ctx.defenderId;
+  const from = state.territories[ctx.from];
+  const to = state.territories[ctx.to];
+  if (!from || !to) {
+    state.combatContext = null;
+    return;
+  }
+
+  let attDice = [...ctx.rawAttDice];
+  let defDice = [...ctx.rawDefDice];
+
+  const preCards = (ctx.pendingCombatCards || []).filter(
+    (c) => (c.card.effect.combatPhase || 'pre_compare') === 'pre_compare',
+  );
+  const postCards = (ctx.pendingCombatCards || []).filter(
+    (c) => c.card.effect.combatPhase === 'post_compare',
+  );
+
+  for (const { card, pid: cpid, entry } of preCards) {
+    const isAtt = cpid === pid;
+    applyCombatCardEffect(state, card, attDice, defDice, isAtt, entry?.targets?.dieIndex);
+  }
+
+  if (ctx.fromArmiesBefore === 2 && playerHasRelic(state, pid, 'guerrilla_attack')) {
+    attDice[0] = applyDieBonus(attDice[0], getRelicEffectByType(state, pid, 'guerrilla_attack').value);
+  }
+  if (ctx.useBastion && playerHasRelic(state, defPid, 'bastion_defense')) {
+    defDice[0] = applyDieBonus(defDice[0], getRelicEffectByType(state, defPid, 'bastion_defense').value);
+  }
+
+  attDice.sort((a, b) => b - a);
+  defDice.sort((a, b) => b - a);
+
+  let pairs = Math.min(attDice.length, defDice.length);
+  let attLoss = 0;
+  let defLoss = 0;
+  for (let i = 0; i < pairs; i++) {
+    if (attDice[i] > defDice[i]) defLoss += 1;
+    else attLoss += 1;
+  }
+
+  for (const { card, pid: cpid, entry } of postCards) {
+    const isAtt = cpid === pid;
+    if (card.effect.type === 'reroll_low' || card.effect.type === 'att_reroll_low') {
+      const dice = isAtt ? attDice : defDice;
+      const idx = entry?.targets?.dieIndex ?? dice.length - 1;
+      if (dice[idx] !== undefined) {
+        dice[idx] = 1 + state.rng.int(6);
+        dice.sort((a, b) => b - a);
+      }
+    }
+    attDice.sort((a, b) => b - a);
+    defDice.sort((a, b) => b - a);
+    pairs = Math.min(attDice.length, defDice.length);
+    attLoss = 0;
+    defLoss = 0;
+    for (let i = 0; i < pairs; i++) {
+      if (attDice[i] > defDice[i]) defLoss += 1;
+      else attLoss += 1;
+    }
+  }
+
+  from.armies -= attLoss;
+  to.armies -= defLoss;
+  state.players[pid].armiesLostThisTurn = (state.players[pid].armiesLostThisTurn || 0) + attLoss;
+  state.players[defPid].armiesLostThisTurn = (state.players[defPid].armiesLostThisTurn || 0) + defLoss;
+  state.attacksThisTurn += 1;
+  state.mustAttackSatisfied = true;
+
+  let conquered = false;
+  let usedCardId = preCards[0]?.entry?.cardId || postCards[0]?.entry?.cardId || null;
+
+  if (to.armies <= 0) {
+    const prevOwner = to.owner;
+    to.owner = pid;
+    const moveMax = from.armies - 1;
+    const auto = state.players[pid].isHuman ? 1 : Math.max(1, Math.min(moveMax, ctx.attDiceCount));
+    from.armies -= auto;
+    to.armies = auto;
+    const conquerFx = getRelicEffectByType(state, pid, 'conquer_bonus_army');
+    if (conquerFx?.type === 'conquer_bonus_army') {
+      const max = conquerFx.maxPerTurn ?? Infinity;
+      const used = state.players[pid].aggressorUsesThisTurn ?? 0;
+      if (used < max) {
+        to.armies += conquerFx.value;
+        state.players[pid].aggressorUsesThisTurn = used + 1;
+      }
+    }
+    conquered = true;
+    state.conqueredThisTurn = true;
+    state.conquersThisTurn = (state.conquersThisTurn ?? 0) + 1;
+    if (state.players[pid].isHuman && from.armies > 1) {
+      state.pendingInvasion = { from: ctx.from, to: ctx.to };
+    }
+    log(
+      state,
+      `Conquista ${TERRITORIES[ctx.to].name}! (${attDice.join(',')} vs ${defDice.join(',')})`,
+      { type: 'conquer' },
+    );
+    if (getPlayerTerritories(state, prevOwner).length === 0) {
+      checkVictory(state);
+    }
+  } else {
+    if (playerHasRelic(state, defPid, 'redoubt_defense') && !state.players[defPid].redoubtUsedThisTurn) {
+      to.armies += getRelicEffectByType(state, defPid, 'redoubt_defense').value ?? 1;
+      state.players[defPid].redoubtUsedThisTurn = true;
+      log(state, `Ridotta: +1 su ${TERRITORIES[ctx.to].name}.`);
+    }
+    log(state, `Battaglia ${TERRITORIES[ctx.from].name}→${TERRITORIES[ctx.to].name}: ${attDice.join(',')} vs ${defDice.join(',')}`);
+  }
+
+  state.lastBattle = {
+    from: ctx.from,
+    to: ctx.to,
+    attDice,
+    defDice,
+    attLoss,
+    defLoss,
+    conquered,
+  };
+  state.combatContext = null;
+  state.pendingCombatCard = null;
+}
+
+function getStackActions(state, actorId) {
+  const actions = [];
+  if (state.vanillaMode) return actions;
+
+  if (state.pendingCast) {
+    const pc = state.pendingCast;
+    if (actorId === pc.playerId) {
+      if (!pc.needsDiePick || pc.targets?.dieIndex != null) {
+        actions.push({ type: 'CAST_CONFIRM', playerId: actorId });
+      }
+      actions.push({ type: 'CAST_CANCEL', playerId: actorId });
+      if (pc.needsDiePick) {
+        const ctx = state.combatContext;
+        if (ctx) {
+          const isAtt = actorId === ctx.attackerId;
+          const dice = isAtt ? ctx.rawAttDice : ctx.rawDefDice;
+          for (let i = 0; i < dice.length; i++) {
+            actions.push({ type: 'SET_CAST_DIE', dieIndex: i, playerId: actorId });
+          }
+        }
+      }
+    }
+    return actions;
+  }
+
+  if (state.responseWindow) {
+    const passed = state.responseWindow.passedPlayerIds || [];
+    if (actorId && !passed.includes(actorId)) {
+      actions.push({ type: 'PASS_STACK', playerId: actorId });
+    }
+  }
+
+  if (!state.responseWindow) {
+    const pid = state.currentPlayerId;
+    if (actorId !== pid) return actions;
+    if (state.combatContext) return actions;
+    for (let i = 0; i < state.players[pid].hand.length; i++) {
+      const card = getCard(state.players[pid].hand[i]);
+      if (
+        card?.timing === 'action' &&
+        isHandPlayable(card, state.phase) &&
+        canStartCast(state, pid, card)
+      ) {
+        actions.push({ type: 'CAST_START', handIndex: i, playerId: pid });
+      }
+    }
+    return actions;
+  }
+
+  for (const pid of state.playerOrder) {
+    if (actorId && actorId !== pid) continue;
+    const hand = state.players[pid].hand;
+    for (let i = 0; i < hand.length; i++) {
+      const card = getCard(hand[i]);
+      if (!card) continue;
+      if (card.timing === 'instant' && canRespondInstant(state, pid) && canStartCast(state, pid, card)) {
+        actions.push({ type: 'CAST_START', handIndex: i, playerId: pid });
+      }
+      if (card.timing === 'combat' && canCastCombat(state, pid) && canStartCast(state, pid, card)) {
+        actions.push({ type: 'CAST_START', handIndex: i, playerId: pid });
+      }
+    }
+  }
+  return actions;
+}
+
+function resolveBastionChoice(state, action) {
+  if (!state.pendingBastion) return state;
+  const pending = state.pendingBastion;
+  state.pendingBastion = null;
+  return resolveAttack(state, {
+    type: 'ATTACK',
+    from: pending.from,
+    to: pending.to,
+    attackDice: pending.attackDice,
+    useBastion: !!action.use,
+    nowMs: action.nowMs,
+  });
+}
+
+function skipRecycle(state) {
+  if (!state.pendingRecycle) return state;
+  state.pendingRecycle = false;
+  log(state, 'Riciclaggio: passi.');
+  return state;
+}
+
+function recycleCard(state, action) {
+  if (!state.pendingRecycle) return state;
+  const pid = state.currentPlayerId;
+  const handIndex = action.handIndex;
+  const cardId = state.players[pid].hand[handIndex];
+  if (!cardId) return state;
+  state.players[pid].hand.splice(handIndex, 1);
+  state.cardDiscard.push(cardId);
+  state.pendingRecycle = false;
+  const result = drawCard(state, pid);
+  if (result?.needsDiscard) {
+    state.pendingDrawAfterDiscard = true;
+    log(state, 'Riciclaggio: mano piena — scarta 1 carta per pescare.');
+  } else if (result?.cardId) {
+    log(state, `Riciclaggio: scarti ${getCard(cardId).name}, peschi ${getCard(result.cardId).name}.`);
+  } else {
+    log(state, `Riciclaggio: scarti ${getCard(cardId).name}.`);
+  }
+  return state;
+}
+
 function resolveAttack(state, action) {
+  const nowMs = stackNow(action);
   if (state.phase !== 'attack') return state;
-  if (state.pendingInvasion) {
-    log(state, 'Completa prima lo spostamento nella zona conquistata.');
+  if (state.pendingInvasion || state.combatContext || state.responseWindow) {
+    log(state, 'Combattimento o stack in corso.');
     return state;
   }
   const pid = state.currentPlayerId;
@@ -741,149 +1698,79 @@ function resolveAttack(state, action) {
   if (from.owner !== pid || to.owner === pid) return state;
   if (!areAdjacent(action.from, action.to)) return state;
   if (from.armies < 2) return state;
+  if (isTerritoryIsolated(state, action.from)) {
+    log(state, 'Territorio isolato: non può attaccare.');
+    return state;
+  }
+
+  const defPid = to.owner;
+  const fromArmiesBefore = from.armies;
+
+  let useBastion = false;
+  if (defPid !== pid && canUseBastion(state, defPid)) {
+    if (action.useBastion === undefined && state.players[defPid].isHuman) {
+      state.pendingBastion = {
+        defenderId: defPid,
+        from: action.from,
+        to: action.to,
+        attackDice: action.attackDice,
+      };
+      return state;
+    }
+    useBastion =
+      action.useBastion === true ||
+      (action.useBastion !== false &&
+        !state.players[defPid].isHuman &&
+        aiShouldUseBastion(state, defPid, action.to, action.attackDice ?? 3));
+    if (useBastion) {
+      state.players[defPid].bastionUsedRound = state.round;
+      log(state, `${playerName(state, defPid)} usa Bastione (in risoluzione).`);
+    }
+  }
 
   let attDiceCount = Math.min(action.attackDice ?? 3, from.armies - 1, 3);
   let defDiceCount = Math.min(2, to.armies);
-
   const event = getActiveEvent(state);
   const attImmune = event?.tag === 'harm' && isImmuneToHarm(state, pid);
-  const defImmune = event?.tag === 'harm' && isImmuneToHarm(state, to.owner);
-
+  const defImmune = event?.tag === 'harm' && isImmuneToHarm(state, defPid);
   if (event?.effect?.type === 'dice_cap') {
     if (!attImmune) attDiceCount = Math.min(attDiceCount, event.effect.attack);
     if (!defImmune) defDiceCount = Math.min(defDiceCount, event.effect.defend);
   }
 
-  let attDice = rollDice(attDiceCount, state.rng);
-  let defDice = rollDice(defDiceCount, state.rng);
-
-  // Relic: first strike — add virtual +1 to highest attack die on first attack
-  if (state.attacksThisTurn === 0 && playerHasRelic(state, pid, 'first_attack_bonus_die')) {
-    attDice[0] = applyDieBonus(attDice[0], 1);
-  }
-
-  // Relic: lucky die — +1 to lowest attack die
-  if (playerHasRelic(state, pid, 'attack_low_die_bonus')) {
-    const idx = attDice.length - 1;
-    attDice[idx] = applyDieBonus(attDice[idx], getRelicEffect(state, pid).value);
-  }
-
-  // Relic: iron shield on defender
-  if (playerHasRelic(state, to.owner, 'defend_high_die_bonus')) {
-    defDice[0] = applyDieBonus(defDice[0], getRelicEffect(state, to.owner).value);
-  }
-
-  // Event storm
+  let rawAttDice = rollDice(attDiceCount, state.rng);
+  let rawDefDice = rollDice(defDiceCount, state.rng);
   if (event?.effect?.type === 'attack_high_die_penalty' && !attImmune) {
-    attDice[0] = applyDieBonus(attDice[0], -event.effect.value);
+    rawAttDice[0] = applyDieBonus(rawAttDice[0], -event.effect.value);
   }
+  rawAttDice.sort((a, b) => b - a);
+  rawDefDice.sort((a, b) => b - a);
 
-  // Combat card from attacker
-  let usedCardId = null;
-  let handIndex = state.pendingCombatCard;
-  if (handIndex != null && handIndex >= 0) {
-    const cardId = state.players[pid].hand[handIndex];
-    const card = CARDS[cardId];
-    if (card?.type === 'combat') {
-      usedCardId = cardId;
-      if (card.effect.type === 'att_high_die_bonus') {
-        attDice[0] = applyDieBonus(attDice[0], card.effect.value);
-      } else if (card.effect.type === 'att_reroll_low') {
-        const idx = attDice.length - 1;
-        attDice[idx] = 1 + state.rng.int(6);
-        attDice.sort((a, b) => b - a);
-      } else if (card.effect.type === 'def_high_die_penalty') {
-        defDice[0] = applyDieBonus(defDice[0], -card.effect.value);
-      } else if (card.effect.type === 'def_high_die_bonus') {
-        // Attacker playing fortify_die doesn't make sense — ignore unless we allow defending card later
-      }
-      state.players[pid].hand.splice(handIndex, 1);
-      state.cardDiscard.push(cardId);
-    }
-  }
-  state.pendingCombatCard = null;
+  state.combatContext = {
+    from: action.from,
+    to: action.to,
+    attackerId: pid,
+    defenderId: defPid,
+    attDiceCount,
+    fromArmiesBefore,
+    useBastion,
+    rawAttDice,
+    rawDefDice,
+    pendingCombatCards: [],
+  };
 
-  // Re-sort after mods
-  attDice.sort((a, b) => b - a);
-  defDice.sort((a, b) => b - a);
-
-  const pairs = Math.min(attDice.length, defDice.length);
-  let attLoss = 0;
-  let defLoss = 0;
-  for (let i = 0; i < pairs; i++) {
-    if (attDice[i] > defDice[i]) defLoss += 1;
-    else attLoss += 1;
-  }
-
-  from.armies -= attLoss;
-  to.armies -= defLoss;
-
-  state.attacksThisTurn += 1;
-  state.mustAttackSatisfied = true;
-
-  let conquered = false;
-  if (to.armies <= 0) {
-    const prevOwner = to.owner;
-    to.owner = pid;
-    // Temporary: move 1 army so territory is occupied; player/AI then chooses final transfer
-    const moveMax = from.armies - 1;
-    const moveMin = 1;
-    const requested = action.moveArmies;
-    const auto =
-      requested != null
-        ? Math.min(Math.max(moveMin, requested), moveMax)
-        : state.players[pid].isHuman
-          ? moveMin
-          : Math.max(moveMin, Math.min(moveMax, attDiceCount));
-    from.armies -= auto;
-    to.armies = auto;
-    if (playerHasRelic(state, pid, 'conquer_bonus_army')) {
-      to.armies += getRelicEffect(state, pid).value;
-    }
-    conquered = true;
-    state.conqueredThisTurn = true;
-
-    // Human chooses final garrison (1 .. leave 1 behind)
-    if (state.players[pid].isHuman && from.armies > 1 && requested == null) {
-      state.pendingInvasion = {
-        from: action.from,
-        to: action.to,
-      };
-    } else {
-      state.pendingInvasion = null;
-    }
-
-    log(
-      state,
-      `Conquista ${TERRITORIES[action.to].name}! (${attDice.join(',')} vs ${defDice.join(',')})` +
-        (usedCardId ? ` [carta ${CARDS[usedCardId].name}]` : '') +
-        ` · ${auto} armate avanzano`,
-      { type: 'conquer' }
-    );
-    if (getPlayerTerritories(state, prevOwner).length === 0) {
-      log(state, `${state.players[pid].name} elimina ${state.players[prevOwner].name}!`, { type: 'victory' });
-      checkVictory(state);
-    }
-  } else {
-    log(
-      state,
-      `Attacco ${TERRITORIES[action.from].name}→${TERRITORIES[action.to].name}: ` +
-        `${attDice.join(',')} vs ${defDice.join(',')} (att -${attLoss}, dif -${defLoss})` +
-        (usedCardId ? ` [${CARDS[usedCardId].name}]` : '')
-    );
-  }
-
+  openResponseWindow(state, 'combat', nowMs);
+  log(
+    state,
+    `Attacco ${TERRITORIES[action.from].name}→${TERRITORIES[action.to].name}: dadi ${rawAttDice.join(',')} vs ${rawDefDice.join(',')} — finestra risposta.`,
+  );
   state.lastBattle = {
     from: action.from,
     to: action.to,
-    attDice,
-    defDice,
-    attLoss,
-    defLoss,
-    conquered,
-    card: usedCardId,
+    attDice: rawAttDice,
+    defDice: rawDefDice,
+    pending: true,
   };
-
   return state;
 }
 
@@ -917,12 +1804,13 @@ function fortify(state, action) {
   const from = state.territories[action.from];
   const to = state.territories[action.to];
   if (!from || !to || from.owner !== pid || to.owner !== pid) return state;
+  if (isTerritoryIsolated(state, action.from)) {
+    log(state, 'Territorio isolato: non può spostare armate.');
+    return state;
+  }
   if (!canFortifyBetween(state, action.from, action.to)) return state;
 
-  const isExtra =
-    state.fortifyUsed &&
-    playerHasRelic(state, pid, 'extra_fortify_move') &&
-    !state.extraFortifyUsed;
+  const isExtra = state.fortifyUsed && state.extraFortifyRemaining > 0;
   if (state.fortifyUsed && !isExtra) {
     log(state, 'Spostamento già usato.');
     return state;
@@ -935,86 +1823,11 @@ function fortify(state, action) {
   from.armies -= armies;
   to.armies += armies;
   if (isExtra) {
-    state.extraFortifyUsed = true;
+    state.extraFortifyRemaining -= 1;
     log(state, `Spostamento extra: ${armies} → ${TERRITORIES[action.to].name}.`);
   } else {
     state.fortifyUsed = true;
     log(state, `Spostamento: ${armies} da ${TERRITORIES[action.from].name} a ${TERRITORIES[action.to].name}.`);
-  }
-  return state;
-}
-
-function playActionCard(state, action) {
-  const pid = state.currentPlayerId;
-  const handIndex = action.handIndex;
-  const cardId = state.players[pid].hand[handIndex];
-  if (!cardId) return state;
-  const card = CARDS[cardId];
-  if (card.type !== 'action') return state;
-  if (!card.phases.includes(state.phase)) return state;
-
-  // Remove card first
-  state.players[pid].hand.splice(handIndex, 1);
-  state.cardDiscard.push(cardId);
-
-  switch (card.effect.type) {
-    case 'add_armies': {
-      const tid = action.territoryId ?? getPlayerTerritories(state, pid)[0];
-      if (state.territories[tid]?.owner === pid) {
-        state.territories[tid].armies += card.effect.value;
-        log(state, `${card.name}: +${card.effect.value} su ${TERRITORIES[tid].name}.`);
-      }
-      break;
-    }
-    case 'free_move': {
-      const from = action.from;
-      const to = action.to;
-      const n = Math.min(action.armies ?? card.effect.value, card.effect.value);
-      if (
-        from &&
-        to &&
-        state.territories[from]?.owner === pid &&
-        state.territories[to]?.owner === pid &&
-        areAdjacent(from, to) &&
-        state.territories[from].armies - n >= 1 &&
-        n >= 1
-      ) {
-        state.territories[from].armies -= n;
-        state.territories[to].armies += n;
-        log(state, `${card.name}: ${n} armate spostate.`);
-      } else {
-        log(state, `${card.name}: movimento non valido, carta comunque spesa.`);
-      }
-      break;
-    }
-    case 'draw': {
-      for (let i = 0; i < card.effect.value; i++) {
-        const r = drawCard(state, pid);
-        if (r?.cardId) log(state, `Pesci ${CARDS[r.cardId].name}.`);
-        else if (r?.needsDiscard) {
-          // discard oldest
-          const discarded = state.players[pid].hand.shift();
-          if (discarded) state.cardDiscard.push(discarded);
-          const r2 = drawCard(state, pid);
-          if (r2?.cardId) log(state, `Scarti e peschi ${CARDS[r2.cardId].name}.`);
-        }
-      }
-      break;
-    }
-    case 'damage_adjacent_enemy': {
-      const tid = action.territoryId;
-      const t = state.territories[tid];
-      if (t && t.owner !== pid && t.armies > 1) {
-        const near = ADJACENCY[tid].some((n) => state.territories[n].owner === pid);
-        if (near) {
-          t.armies -= card.effect.value;
-          log(state, `${card.name}: ${TERRITORIES[tid].name} -${card.effect.value}.`);
-        }
-      }
-      break;
-    }
-    default:
-      break;
   }
   return state;
 }
@@ -1073,7 +1886,7 @@ function discardForDraw(state, action) {
   state.cardDiscard.push(discarded);
   state.pendingDrawAfterDiscard = false;
   const r = drawCard(state, pid);
-  if (r?.cardId) log(state, `Scarti ${CARDS[discarded].name}, peschi ${CARDS[r.cardId].name}.`);
+  if (r?.cardId) log(state, `Scarti ${getCard(discarded).name}, peschi ${getCard(r.cardId).name}.`);
   return state;
 }
 
@@ -1085,4 +1898,9 @@ export function getContinents() {
   return CONTINENTS;
 }
 
-export { ADJACENCY, CARDS, RELICS, EVENTS, TERRITORIES, CONTINENTS, MISSIONS, getClassicCard, isClassicCardId };
+export { ADJACENCY, TERRITORIES, CONTINENTS, getClassicCard, isClassicCardId };
+export { CARDS, getCard, isCombatCard, isHandPlayable } from '../data/cards.js';
+export { RELICS, RELIC_IDS } from '../data/relics.js';
+export { EVENTS } from '../data/events.js';
+export { MISSIONS } from '../data/missions.js';
+export { windowRemainingMs, STACK_WINDOW_MS, canEndPhaseNow, canStartCast } from './stack.js';

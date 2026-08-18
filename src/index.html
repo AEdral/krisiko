@@ -138,6 +138,7 @@
     </header>
 
     <main class="layout">
+      <aside class="stack-panel hidden" id="stack-panel" aria-label="Stack carte"></aside>
       <section class="map-panel">
         <svg id="map" viewBox="172 119 745 503" preserveAspectRatio="xMidYMid meet" aria-label="Mappa Krisiko"></svg>
         <div class="map-zoom" role="group" aria-label="Zoom mappa">
@@ -146,6 +147,23 @@
           <button type="button" id="map-zoom-reset" class="btn btn-ghost" aria-label="Tutta la mappa" title="Tutta la mappa">1×</button>
         </div>
         <div class="map-hint" id="map-hint">Seleziona un territorio</div>
+        <div id="dice-overlay" class="dice-overlay hidden">
+          <div class="dice-panel" id="dice-panel">
+            <div class="dice-title" id="dice-title"></div>
+            <div class="dice-rows">
+              <div class="dice-row">
+                <span class="dice-label">Attacco</span>
+                <div id="dice-att" class="dice-set"></div>
+              </div>
+              <div class="dice-row">
+                <span class="dice-label">Difesa</span>
+                <div id="dice-def" class="dice-set"></div>
+              </div>
+            </div>
+            <div class="dice-result" id="dice-result"></div>
+            <div class="dice-hint">Clic per chiudere</div>
+          </div>
+        </div>
       </section>
 
       <div class="hud-stack">
@@ -172,6 +190,7 @@
           </div>
           <div class="tray-section tray-hand-wrap">
             <div class="tray-label">Mano</div>
+            <div id="hand-cast-bar" class="hand-cast-bar hidden" aria-label="Conferma lancio"></div>
             <div id="hand" class="hand"></div>
           </div>
           <div class="hud-fold tray-section tray-dash">
@@ -182,24 +201,6 @@
       </div>
       <div class="rail-backdrop" id="rail-backdrop"></div>
     </main>
-    </div>
-
-    <div id="dice-overlay" class="dice-overlay hidden">
-      <div class="dice-panel" id="dice-panel">
-        <div class="dice-title" id="dice-title"></div>
-        <div class="dice-rows">
-          <div class="dice-row">
-            <span class="dice-label">Attacco</span>
-            <div id="dice-att" class="dice-set"></div>
-          </div>
-          <div class="dice-row">
-            <span class="dice-label">Difesa</span>
-            <div id="dice-def" class="dice-set"></div>
-          </div>
-        </div>
-        <div class="dice-result" id="dice-result"></div>
-        <div class="dice-hint">Clic per chiudere</div>
-      </div>
     </div>
 
     <div id="fortify-modal" class="overlay hidden">

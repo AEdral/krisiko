@@ -60,7 +60,8 @@ html, body {
   border-bottom: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.35);
   flex-shrink: 0;
-  z-index: 4;
+  position: relative;
+  z-index: 60;
 }
 
 .brand h1 {
@@ -98,6 +99,13 @@ html, body {
     "tray";
 }
 
+.layout.has-stack {
+  grid-template-columns: 176px 1fr;
+  grid-template-areas:
+    "stack map"
+    "tray tray";
+}
+
 .hud-stack {
   display: contents;
 }
@@ -124,6 +132,190 @@ html, body {
   background:
     radial-gradient(circle at 40% 45%, rgba(35, 85, 105, 0.45), transparent 55%),
     linear-gradient(180deg, #0f2c38, #0a1e28);
+}
+
+.stack-panel {
+  grid-area: stack;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+  min-height: 0;
+  padding: 0.65rem 0.55rem 0.55rem;
+  background: rgba(6, 14, 18, 0.94);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+  z-index: 4;
+}
+.stack-panel.hidden {
+  display: none;
+}
+.stack-panel h2 {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.stack-timer {
+  font-size: 1.35rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.stack-timer.is-paused {
+  color: #ffe08a;
+}
+.stack-banner {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #ffe08a;
+}
+.stack-entries {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 0.28rem;
+}
+.stack-entry {
+  padding: 0.35rem 0.45rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+.stack-entry .skind {
+  display: block;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.stack-entry.is-top {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(126, 211, 255, 0.25);
+}
+.stack-entry.is-combat {
+  border-color: rgba(255, 180, 80, 0.45);
+  background: rgba(255, 160, 60, 0.08);
+}
+.stack-empty {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.stack-combat {
+  margin-top: auto;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+.stack-combat-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.stack-combat-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.stack-combat-row .dice-set {
+  justify-content: flex-start;
+}
+.stack-combat .die {
+  width: 28px;
+  height: 28px;
+  font-size: 1.15rem;
+  border-radius: 6px;
+}
+.stack-combat-hint {
+  font-size: 0.68rem;
+  color: var(--accent);
+  line-height: 1.3;
+  margin-top: 0.35rem;
+}
+.stack-combat-hint.stack-combat-active {
+  color: #ffc880;
+  font-weight: 600;
+}
+
+.arcana-relic-list,
+.choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+.arcana-relic-btn,
+.choice-item-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 0.15rem;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+.arcana-relic-btn strong,
+.choice-item-btn strong {
+  color: var(--accent);
+}
+.arcana-relic-btn span,
+.choice-item-btn span {
+  color: var(--muted);
+  font-size: 0.65rem;
+}
+.choice-item-btn em {
+  font-style: normal;
+  font-size: 0.62rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.choice-item-btn.is-selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(126, 211, 255, 0.35);
+}
+.choice-prompt {
+  font-weight: 600;
+  color: var(--accent);
+}
+.choice-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+  flex-wrap: wrap;
+}
+.choice-mission-preview,
+.choice-card-preview {
+  margin-top: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+.choice-mission-preview strong,
+.choice-card-preview strong {
+  display: block;
+  color: var(--accent);
+  margin-bottom: 0.15rem;
+}
+.choice-mission-preview span,
+.choice-card-preview span {
+  color: var(--muted);
+  font-size: 0.65rem;
 }
 
 #map {
@@ -539,6 +731,118 @@ html, body {
   overflow: hidden;
 }
 
+.tray-relic .relic-extra {
+  margin-top: 0.45rem;
+  padding-top: 0.4rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+
+.tray-relic .relic-extra .rname {
+  font-size: 0.68rem;
+}
+
+.tray-relic .relic-extra .rdesc {
+  -webkit-line-clamp: 3;
+}
+
+.tray-relic .relic-extra .rdesc {
+  -webkit-line-clamp: 3;
+}
+
+.combat-dice-bar {
+  margin: 0.35rem 0 0.5rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  background: rgba(20, 28, 42, 0.92);
+  border: 1px solid rgba(126, 211, 255, 0.22);
+}
+.combat-dice-bar.hidden { display: none; }
+.combat-dice-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+  flex-wrap: wrap;
+}
+.combat-dice-route {
+  font-family: 'Archivo Black', sans-serif;
+  font-size: 0.78rem;
+  color: var(--accent);
+}
+.combat-dice-status {
+  font-size: 0.65rem;
+  color: #ffc880;
+  font-weight: 600;
+}
+.combat-dice-rows { display: flex; gap: 1rem; flex-wrap: wrap; }
+.combat-dice-side { flex: 1; min-width: 8rem; }
+.combat-dice-label {
+  display: block;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+.combat-dice-set { display: flex; gap: 0.45rem; flex-wrap: wrap; }
+.combat-die {
+  width: 3rem;
+  height: 3rem;
+  font-size: 2rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: default;
+  padding: 0;
+  color: inherit;
+}
+.combat-die.att { border-color: rgba(255, 120, 100, 0.45); }
+.combat-die.def { border-color: rgba(100, 180, 255, 0.45); }
+button.combat-die { cursor: pointer; }
+button.combat-die:hover {
+  border-color: var(--accent);
+  background: rgba(126, 211, 255, 0.12);
+}
+.combat-die.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(126, 211, 255, 0.35);
+  background: rgba(126, 211, 255, 0.15);
+}
+.combat-dice-pick-hint {
+  margin-top: 0.4rem;
+  font-size: 0.68rem;
+  color: #ffc880;
+  font-weight: 600;
+}
+
+.hand-cast-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.45rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  background: rgba(126, 211, 255, 0.1);
+  border: 1px solid rgba(126, 211, 255, 0.28);
+}
+.hand-cast-bar.hidden { display: none; }
+.hand-cast-text { font-size: 0.78rem; line-height: 1.25; }
+.hand-cast-text strong { color: var(--accent); }
+.hand-cast-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+
+.stack-pass-btn {
+  width: 100%;
+  margin-top: 0.45rem;
+  font-size: 0.75rem;
+}
+
 .tray-hand-wrap {
   min-width: 0;
 }
@@ -573,7 +877,29 @@ html, body {
   transform: translateY(-1px);
 }
 
+.card.playable {
+  border-color: #7fd99a;
+  box-shadow: 0 0 0 1px rgba(127, 217, 154, 0.55);
+  background: rgba(127, 217, 154, 0.12);
+  transform: translateY(-2px);
+}
+
+.card.playable:hover {
+  border-color: #9eebba;
+}
+
+.card:disabled {
+  opacity: 0.42;
+  cursor: default;
+  transform: none;
+}
+
 .card .cname { font-weight: 700; font-size: 0.74rem; }
+.card .cterr {
+  font-size: 0.6rem;
+  color: var(--text);
+  opacity: 0.85;
+}
 .card .ctype {
   font-size: 0.55rem;
   color: var(--accent);
@@ -1185,15 +1511,24 @@ html, body {
 
 
 .dice-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  z-index: 50;
+  z-index: 12;
   display: grid;
   place-items: center;
   background: rgba(0, 0, 0, 0.45);
   cursor: pointer;
 }
 .dice-overlay.hidden { display: none; }
+.dice-overlay.is-live {
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 45%, rgba(0, 0, 0, 0.42) 0%, rgba(0, 0, 0, 0.12) 55%, transparent 78%);
+  cursor: default;
+}
+.dice-overlay.is-live .dice-panel {
+  pointer-events: auto;
+  cursor: default;
+}
 .dice-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -1239,9 +1574,21 @@ html, body {
   background: #f4f0e6;
   color: #1a1208;
   line-height: 1;
+  border: none;
+  padding: 0;
+}
+button.die {
+  cursor: pointer;
+}
+button.die:hover {
+  transform: scale(1.08);
 }
 .die.att { box-shadow: inset 0 0 0 2px var(--p1); }
 .die.def { box-shadow: inset 0 0 0 2px var(--p2); }
+.die.is-selected {
+  box-shadow: inset 0 0 0 3px var(--accent), 0 0 0 2px rgba(224, 168, 74, 0.45);
+  transform: scale(1.08);
+}
 .die.rolling { animation: die-pop 0.45s ease; }
 @keyframes die-pop {
   0% { transform: scale(0.4) rotate(-20deg); opacity: 0; }
@@ -1399,6 +1746,48 @@ html, body {
     grid-template-areas:
       "map"
       "hud";
+  }
+
+  .layout.has-stack {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "stack"
+      "map"
+      "hud";
+  }
+
+  .stack-panel {
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    padding: 0.4rem 0.5rem;
+  }
+  .stack-panel h2 {
+    width: 100%;
+  }
+  .stack-entries {
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow-x: auto;
+    max-height: 72px;
+  }
+  .stack-entry {
+    min-width: 110px;
+  }
+  .stack-combat {
+    width: 100%;
+    margin-top: 0.2rem;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .stack-combat-title {
+    width: 100%;
   }
 
   .map-zoom {

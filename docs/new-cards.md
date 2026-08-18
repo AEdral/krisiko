@@ -1,6 +1,6 @@
 # Krisiko — Nuovo mazzo (bozza)
 
-Design in corso. **Non** è ancora nel codice (`src/js/data/cards.js` resta il mazzo demo).  
+Design implementato in `src/js/data/cards.js` (44 carte).  
 Niente tris. Ogni carta è **uso singolo**, effetto immediato.
 
 ## Struttura
@@ -15,7 +15,7 @@ Niente tris. Ogni carta è **uso singolo**, effetto immediato.
 
 42 territori unici sulle carte non-jolly (stesso effetto, terra diversa). I 2 jolly non hanno territorio.
 
-Pesca: dopo almeno 1 conquista nel turno → 1 carta. Mano max 5 (6 con reliquia Quartiermastro).
+Pesca: dopo almeno 1 conquista nel turno → 1 carta. Mano max 5 (7 con reliquia Quartiermastro).
 
 ## Rider (tutte tranne i jolly)
 
@@ -46,11 +46,11 @@ Se l’effetto parla di dadi / di *questo lancio*, serve un combattimento in cor
 | **Reclutamento** | 4 | Action | +2 armate su **un** tuo territorio. |
 | **Marcia** | 2 | Action | Sposta fino a 3 armate tra due tuoi territori **adiacenti**. Non consuma lo spostamento di fase. |
 | **Sabotaggio** | 2 | Action | L’avversario scarta **1 carta a caso**. Se la mano è vuota, l’effetto è nullo. |
-| **Esploratore** | 3 | Action | Scarta questa carta, pesca 2 (limite mano). Il rider, se scatta, **prima** della pesca. |
+| **Esploratore** | 2 | Action | Scarta questa carta, pesca 2 (limite mano). Il rider, se scatta, **prima** della pesca. |
 | **Ponderare** | 2 | Action | Guarda le **prime 3** carte del mazzo. Aggiungine **1** alla mano; le altre in fondo **nell’ordine che vuoi**. Se nel mazzo ce ne sono meno di 3, guardi quelle che ci sono. Hai speso Ponderare: in mano resti pari (salvo limite). Rider, se scatta, prima. |
-| **Negare** | 3 | Instant | In risposta a una **comune** o **rara** avversaria: quella carta non ha effetto e va scartata. **Epiche e jolly** non si negano. Negare si può negare. Rider, se scatta, sì. |
+| **Negare** | 4 | Instant | In risposta a una **comune** o **rara** avversaria: quella carta non ha effetto e va scartata. **Epiche e jolly** non si negano. Negare si può negare. Rider, se scatta, sì. |
 
-4+4+4+2+2+3+2+3 = **24**.
+4+4+4+2+2+2+2+4 = **24**.
 
 ## Rare (12)
 

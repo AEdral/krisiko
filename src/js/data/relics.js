@@ -1,53 +1,91 @@
-/** Passive relics — one assigned at setup. */
+/** Passive relics — one assigned at random at setup (Krisiko mode). */
 
 export const RELICS = {
-  lucky_die: {
-    id: 'lucky_die',
-    name: 'Dado Fortunato',
-    description: 'Nei tuoi attacchi, il dado più basso riceve +1 (max 6).',
-    effect: { type: 'attack_low_die_bonus', value: 1 },
-  },
-  iron_shield: {
-    id: 'iron_shield',
-    name: 'Scudo di Ferro',
-    description: 'In difesa, il tuo dado più alto riceve +1 (max 6).',
-    effect: { type: 'defend_high_die_bonus', value: 1 },
-  },
   war_chest: {
     id: 'war_chest',
     name: 'Cassa di Guerra',
     description: '+1 rinforzo all’inizio di ogni tuo turno.',
     effect: { type: 'extra_reinforcement', value: 1 },
   },
-  first_strike: {
-    id: 'first_strike',
-    name: 'Primo Colpo',
-    description: 'Nel primo attacco del turno, attacchi con +1 dado virtuale (max 3 dadi fisici, +1 al confronto).',
-    effect: { type: 'first_attack_bonus_die', value: 1 },
+  continental_identity: {
+    id: 'continental_identity',
+    name: 'Identità Continentale',
+    description:
+      'Per ogni continente che controlli, il suo bonus rinforzi vale +50% arrotondato per difetto (+2→+3, +5→+7, +7→+10).',
+    effect: { type: 'continent_bonus_multiplier', value: 1.5 },
   },
-  border_patrol: {
-    id: 'border_patrol',
-    name: 'Pattuglia di Confine',
-    description: 'Dopo lo spostamento, puoi spostare 1 armata extra tra due territori adiacenti tuoi.',
-    effect: { type: 'extra_fortify_move', value: 1 },
+  mobility_net: {
+    id: 'mobility_net',
+    name: 'Rete di mobilità',
+    description:
+      'Dopo lo spostamento di fase, puoi fare fino a 2 spostamenti extra da 1 armata tra territori tuoi adiacenti.',
+    effect: { type: 'extra_fortify_moves', value: 2 },
   },
-  scavenger: {
-    id: 'scavenger',
-    name: 'Raccoglitore',
-    description: 'Quando conquisti un territorio, guadagni +1 armata sul territorio conquistato.',
-    effect: { type: 'conquer_bonus_army', value: 1 },
+  aggressor: {
+    id: 'aggressor',
+    name: 'Aggressore',
+    description:
+      'Quando conquisti un territorio in combattimento, +1 armata su quel territorio. Max 3 volte per turno.',
+    effect: { type: 'conquer_bonus_army', value: 1, maxPerTurn: 3 },
   },
-  storm_caller: {
-    id: 'storm_caller',
-    name: 'Invocatore di Tempeste',
-    description: 'Gli eventi globali negativi non ti colpiscono (solo effetti con tag “harm”).',
-    effect: { type: 'immune_harm_events', value: 1 },
+  conquest_thirst: {
+    id: 'conquest_thirst',
+    name: 'Sete di conquista',
+    description:
+      'Se conquisti almeno 2 territori in combattimento nello stesso turno, a fine fase Attacco pesca 1 carta aggiuntiva.',
+    effect: { type: 'conquest_draw_bonus', minConquers: 2 },
+  },
+  guerrilla: {
+    id: 'guerrilla',
+    name: 'Guerriglia',
+    description:
+      'Attaccando da un territorio con esattamente 2 armate: +1 al tuo dado d’attacco più alto in quel lancio (max 6).',
+    effect: { type: 'guerrilla_attack', value: 1 },
+  },
+  bastion: {
+    id: 'bastion',
+    name: 'Bastione',
+    description:
+      'Una volta per giro: quando un avversario ti attacca nel suo turno, puoi applicare +1 al tuo dado di difesa più alto in quel lancio (max 6).',
+    effect: { type: 'bastion_defense', value: 1 },
+  },
+  redoubt: {
+    id: 'redoubt',
+    name: 'Ridotta',
+    description:
+      'La prima volta per turno che resisti a un attacco (territorio non conquistato): +1 armata su quel territorio.',
+    effect: { type: 'redoubt_defense', value: 1 },
+  },
+  dominion: {
+    id: 'dominion',
+    name: 'Dominio',
+    description: 'Se il rider scatta, +3 armate invece di +2.',
+    effect: { type: 'dominion_rider', bonus: 3, base: 2 },
   },
   quartermaster: {
     id: 'quartermaster',
     name: 'Quartiermastro',
-    description: 'Mano massima carte +1 (6 invece di 5).',
-    effect: { type: 'hand_size_bonus', value: 1 },
+    description: 'Mano massima carte +2 (7 invece di 5).',
+    effect: { type: 'hand_size_bonus', value: 2 },
+  },
+  seer: {
+    id: 'seer',
+    name: 'Veggente',
+    description:
+      'Ogni volta che peschi una carta, guardi la cima del mazzo e puoi metterla in fondo al mazzo prima di pescare.',
+    effect: { type: 'draw_scry', value: 1 },
+  },
+  recycling: {
+    id: 'recycling',
+    name: 'Riciclaggio',
+    description: 'All’inizio del tuo turno, puoi scartare 1 carta per pescarne 1.',
+    effect: { type: 'start_turn_recycle', value: 1 },
+  },
+  alert: {
+    id: 'alert',
+    name: 'Allerta',
+    description: 'Negare e Sciacallo avversari non hanno effetto sulle tue carte.',
+    effect: { type: 'immune_negate_swoop', value: 1 },
   },
 };
 
