@@ -1,9 +1,10 @@
-import { createGame, applyAction, CARDS, TERRITORIES, areAdjacent, canFortifyBetween, PLAYER_SLOTS, MAX_PLAYERS } from './engine/game.js';
+import { createGame, applyAction, getCard, TERRITORIES, areAdjacent, canFortifyBetween, PLAYER_SLOTS, MAX_PLAYERS, getLegalActions, canEndPhaseNow } from './engine/game.js';
 import { isValidClassicSet } from './data/classic-cards.js';
-import { runAiTurn } from './ai/ai.js';
+import { runAiTurn, processStackPhase } from './ai/ai.js';
+import { processChoiceDraft } from './engine/game.js';
 import { renderMap, computeHighlights } from './ui/map.js';
-import { renderHud, renderActions } from './ui/hud.js';
-import { showBattleDice } from './ui/dice.js';
+import { renderHud, renderActions, clearCardHover } from './ui/hud.js';
+import { showBattleDice, syncLiveCombatDice } from './ui/dice.js';
 import { createNet, describeNetError, loadHostedRoom, saveHostedRoom, clearHostedRoom } from './net/client.js';
 
 const els = {
@@ -28,6 +29,7 @@ const els = {
   setupFriendsCount: document.getElementById('setup-friends-count'),
   setupDraw: document.getElementById('setup-draw'),
   setupVanilla: document.getElementById('setup-vanilla'),
+  setupSandbox: document.getElementById('setup-sandbox'),
   setupError: document.getElementById('setup-error'),
   setupBack: document.getElementById('setup-back'),
   setupStart: document.getElementById('setup-start'),
@@ -49,10 +51,17 @@ const els = {
   waitBack: document.getElementById('wait-back'),
   waitBegin: document.getElementById('wait-begin'),
   map: document.getElementById('map'),
+  stackPanel: document.getElementById('stack-panel'),
   mapHint: document.getElementById('map-hint'),
   topMeta: document.getElementById('top-meta'),
   opponentPanel: document.getElementById('opponent-panel'),
   eventBlock: document.getElementById('event-block'),
+  sandboxKit: document.getElementById('sandbox-kit'),
+  sandboxFloat: document.getElementById('sandbox-float'),
+  sandboxFloatToggle: document.getElementById('sandbox-float-toggle'),
+  sandboxFloatSummary: document.getElementById('sandbox-float-summary'),
+  sandboxFloatBody: document.getElementById('sandbox-float-body'),
+  sandboxFloatHeader: document.getElementById('sandbox-float-header'),
   playerRelic: document.getElementById('player-relic'),
   playerMission: document.getElementById('player-mission'),
   playerStats: document.getElementById('player-stats'),
@@ -60,6 +69,11 @@ const els = {
   hand: document.getElementById('hand'),
   actions: document.getElementById('actions'),
   log: document.getElementById('log'),
+  choiceOverlay: document.getElementById('choice-overlay'),
+  choiceTitle: document.getElementById('choice-title'),
+  choiceSubtitle: document.getElementById('choice-subtitle'),
+  choiceOptions: document.getElementById('choice-options'),
+  choiceFooter: document.getElementById('choice-footer'),
   overlay: document.getElementById('overlay'),
   overlayTitle: document.getElementById('overlay-title'),
   overlayBody: document.getElementById('overlay-body'),
@@ -85,15 +99,21 @@ let moveModalMode = null; // 'fortify' | 'invasion'
 let lastShownBattleKey = null;
 
 const ui = {
+  hoverRiderTerritoryId: null,
   selectedId: null,
   selectedCardIndex: null,
+  selectedKitIndex: null,
   mode: null,
   marchFrom: null,
   highlightIds: null,
   missionExpanded: false,
   expandedOpponentId: null,
   localPlayerId: null,
+  serverTimeSkew: 0,
+  dicePendingDismissed: false,
   classicCardSelection: [],
+  choicePick: null,
+  sandboxExpanded: false,
   onCardClick: null,
   onEndPhase: null,
   onClearCombatCard: null,
@@ -106,6 +126,7 @@ const NAME_KEY = 'krisiko.playerName';
 const MODE_KEY = 'krisiko.lobbyMode';
 const VANILLA_KEY = 'krisiko.vanillaMode';
 const DRAW_KEY = 'krisiko.drawEveryTurn';
+const SANDBOX_KEY = 'krisiko.sandboxMode';
 const LOGO_KRISIKO = 'assets/logo-wordmark.png';
 const LOGO_CLASSIC = 'assets/logo-vanilla-wordmark.png';
 const MAX_AI = MAX_PLAYERS - 1;
@@ -114,6 +135,7 @@ let extraHumans = loadExtraHumans();
 let lobbyMode = loadLobbyMode();
 let vanillaMode = loadVanillaMode();
 let drawEveryTurn = loadDrawEveryTurn();
+let sandboxMode = loadBool(SANDBOX_KEY, false);
 let onlineRoom = null;
 let netWait = false;
 let joiningRoomId = null;
@@ -180,6 +202,7 @@ function persistLobby() {
     localStorage.setItem(MODE_KEY, lobbyMode);
     localStorage.setItem(VANILLA_KEY, String(vanillaMode));
     localStorage.setItem(DRAW_KEY, String(drawEveryTurn));
+    localStorage.setItem(SANDBOX_KEY, String(sandboxMode));
     const name = (els.setupName?.value || els.joinName?.value || '').trim();
     if (name) localStorage.setItem(NAME_KEY, name.slice(0, 20));
   } catch {
@@ -193,10 +216,11 @@ function playerName(fromJoin = false) {
   return n || 'Giocatore';
 }
 
-function rulesSummary({ vanilla, draw }) {
-  const bits = [vanilla ? 'Classico' : 'Krisiko'];
-  if (!vanilla && draw) bits.push('pesca ogni turno');
+function rulesSummary({ vanilla, draw, sandbox }) {
+  const bits = [sandbox ? 'Sandbox' : vanilla ? 'Classico' : 'Krisiko'];
+  if (!vanilla && !sandbox && draw) bits.push('pesca ogni turno');
   if (vanilla) bits.push('carte territorio');
+  if (sandbox) bits.push('kit carte');
   return bits.map((b) => `<span class="pill">${b}</span>`).join('');
 }
 
@@ -255,6 +279,7 @@ function enterGame() {
   clearFlowErrors();
   els.app?.classList.toggle('vanilla-mode', !!state?.vanillaMode);
   syncBrandLogo(!!state?.vanillaMode);
+  ensureStackClock();
 }
 
 function clearFlowErrors() {
@@ -313,14 +338,26 @@ async function shareWaitLink() {
 }
 
 function syncRuleToggles() {
+  if (sandboxMode) {
+    lobbyMode = 'local';
+    vanillaMode = false;
+  }
   if (els.setupDraw) {
-    els.setupDraw.disabled = vanillaMode;
+    els.setupDraw.disabled = vanillaMode || sandboxMode;
     els.setupDraw.setAttribute('aria-pressed', drawEveryTurn ? 'true' : 'false');
     els.setupDraw.textContent = drawEveryTurn ? 'On' : 'Off';
   }
   if (els.setupVanilla) {
+    els.setupVanilla.disabled = sandboxMode;
     els.setupVanilla.setAttribute('aria-pressed', vanillaMode ? 'true' : 'false');
     els.setupVanilla.textContent = vanillaMode ? 'On' : 'Off';
+  }
+  if (els.setupSandbox) {
+    els.setupSandbox.setAttribute('aria-pressed', sandboxMode ? 'true' : 'false');
+    els.setupSandbox.textContent = sandboxMode ? 'On' : 'Off';
+  }
+  if (els.setupModeOnline) {
+    els.setupModeOnline.disabled = sandboxMode;
   }
   syncBrandLogo(vanillaMode);
 }
@@ -461,22 +498,31 @@ const net = createNet({
   },
 });
 
+function serverNowMs() {
+  return Date.now() + (ui.serverTimeSkew || 0);
+}
+
 function applyRemoteState(msg) {
   const prevKey = battleKey(state?.lastBattle);
   const hadInvasion = !!state?.pendingInvasion;
+  if (typeof msg.serverTimeMs === 'number') {
+    ui.serverTimeSkew = msg.serverTimeMs - Date.now();
+  }
   ui.localPlayerId = msg.playerId;
   state = msg.state;
   enterGame();
   if (onlineRoom) onlineRoom.status = state.phase === 'game_over' ? 'done' : 'playing';
   refresh();
-  const key = battleKey(state.lastBattle);
-  if (key && key !== prevKey && key !== lastShownBattleKey) {
-    void (async () => {
-      await maybeShowDice();
-      if (state.pendingInvasion && isMyTurn() && !hadInvasion) openInvasionModal();
-    })();
-  } else if (state.pendingInvasion && isMyTurn() && els.fortifyModal.classList.contains('hidden')) {
-    openInvasionModal();
+  if (!state.combatContext) {
+    const key = battleKey(state.lastBattle);
+    if (key && key !== prevKey && key !== lastShownBattleKey && !state.lastBattle?.pending) {
+      void (async () => {
+        await maybeShowDice();
+        if (state.pendingInvasion && isMyTurn() && !hadInvasion) openInvasionModal();
+      })();
+    } else if (state.pendingInvasion && isMyTurn() && els.fortifyModal.classList.contains('hidden')) {
+      openInvasionModal();
+    }
   }
 }
 
@@ -490,6 +536,38 @@ function localId() {
 
 function isMyTurn() {
   return !!state && state.currentPlayerId === localId();
+}
+
+function dispatchCast(action, opts = {}) {
+  dispatch({ ...action, playerId: action.playerId || localId() }, opts);
+}
+
+function playActionCard(action, opts = {}) {
+  if (action.fromKit) {
+    dispatch(
+      {
+        type: 'PLAY_ACTION_CARD',
+        fromKit: true,
+        kitIndex: action.kitIndex ?? ui.selectedKitIndex,
+        territoryId: action.territoryId,
+        from: action.from,
+        to: action.to,
+        armies: action.armies,
+        riderTerritoryId: action.riderTerritoryId,
+        targetPlayerId: action.targetPlayerId,
+      },
+      opts,
+    );
+    return;
+  }
+  dispatch({ type: 'PLAY_ACTION_CARD', ...action }, opts);
+}
+
+function clearCardSelection() {
+  ui.mode = null;
+  ui.selectedCardIndex = null;
+  ui.selectedKitIndex = null;
+  ui.marchFrom = null;
 }
 
 function dispatch(action, opts = {}) {
@@ -513,8 +591,9 @@ function startLocalGame() {
   state = createGame({
     seed: Date.now() & 0xffffffff,
     aiCount: Math.max(1, aiCount),
-    vanillaMode,
-    drawEveryTurn,
+    vanillaMode: sandboxMode ? false : vanillaMode,
+    drawEveryTurn: sandboxMode ? false : drawEveryTurn,
+    sandboxMode,
   });
   ui.localPlayerId = Object.values(state.players).find((p) => p.isHuman)?.id || 'P1';
   resetUi();
@@ -522,12 +601,20 @@ function startLocalGame() {
   els.overlay.classList.add('hidden');
   els.fortifyModal.classList.add('hidden');
   els.diceOverlay.classList.add('hidden');
+  els.app?.classList.toggle('sandbox-mode', !!sandboxMode);
+  if (sandboxMode) {
+    const saved = Number(localStorage.getItem(TRAY_H_KEY));
+    if (!(Number.isFinite(saved) && saved >= TRAY_H_MIN)) {
+      applyTrayHeight(TRAY_H_SANDBOX_DEFAULT);
+    }
+  }
   refresh();
   maybeRunAi();
 }
 
 function startSetup() {
   persistLobby();
+  if (sandboxMode) lobbyMode = 'local';
   if (lobbyMode === 'online') {
     void createOnlineRoom();
     return;
@@ -644,11 +731,14 @@ function joinOnlineRoom(roomId) {
 function resetUi() {
   ui.selectedId = null;
   ui.selectedCardIndex = null;
+  ui.selectedKitIndex = null;
   ui.classicCardSelection = [];
   ui.mode = null;
   ui.marchFrom = null;
   ui.missionExpanded = false;
   ui.expandedOpponentId = null;
+  ui.dicePendingDismissed = false;
+  ui.serverTimeSkew = 0;
   pendingFortify = null;
   lastShownBattleKey = null;
   busy = false;
@@ -657,17 +747,56 @@ function resetUi() {
 
 function battleKey(b) {
   if (!b) return null;
+  if (b.pending) {
+    return `${b.from}|${b.to}|${b.attDice.join(',')}|${b.defDice.join(',')}|pending`;
+  }
   return `${b.from}|${b.to}|${b.attDice.join(',')}|${b.defDice.join(',')}|${b.attLoss}|${b.defLoss}|${b.conquered}`;
 }
 
-async function maybeShowDice() {
+function maybeShowDice() {
   const b = state.lastBattle;
+  if (!b || b.pending) return Promise.resolve();
   const key = battleKey(b);
-  if (!key || key === lastShownBattleKey) return;
+  if (!key || key === lastShownBattleKey) return Promise.resolve();
   lastShownBattleKey = key;
   busy = true;
-  await showBattleDice(els, b, { holdMs: 1700 });
-  busy = false;
+  return showBattleDice(els, b, { holdMs: 1700 }).finally(() => {
+    busy = false;
+  });
+}
+
+let stackClock = null;
+
+function stopStackClock() {
+  if (!stackClock) return;
+  clearInterval(stackClock);
+  stackClock = null;
+}
+
+function ensureStackClock() {
+  if (stackClock || isOnline()) return;
+  stackClock = setInterval(() => {
+    if (!state || state.vanillaMode || isOnline()) return;
+    if (state.pendingInvasion) ensureInvasionUi();
+    if (!state.responseWindow && !state.pendingCast) return;
+    const hadCombat = !!state.combatContext;
+    applyAction(state, { type: 'TICK_STACK', nowMs: Date.now() });
+    processStackPhase(state);
+    refresh();
+    if (hadCombat && !state.combatContext) {
+      void (async () => {
+        await maybeShowDice();
+        ensureInvasionUi();
+      })();
+    } else {
+      ensureInvasionUi();
+    }
+    if (state.combatContext || hadCombat !== !!state.combatContext) {
+      maybeRunAi();
+    } else if (!state.players[state.currentPlayerId]?.isHuman) {
+      maybeRunAi();
+    }
+  }, 250);
 }
 
 function openFortifyModal(from, to) {
@@ -691,11 +820,14 @@ function openInvasionModal() {
   if (!pending) return;
   const from = state.territories[pending.from];
   const to = state.territories[pending.to];
+  if (!from || !to) return;
   const pool = from.armies + to.armies;
   const max = pool - 1;
+  if (max < 1) return;
   const min = 1;
   moveModalMode = 'invasion';
   pendingFortify = null;
+  ui.selectedId = pending.to;
   els.moveModalTitle.textContent = 'Invasione';
   els.moveModalLabel.textContent = 'Armate nella zona conquistata';
   els.fortifyText.textContent = `${TERRITORIES[pending.from].name} → ${TERRITORIES[pending.to].name} (lascia almeno 1 dietro)`;
@@ -706,6 +838,14 @@ function openInvasionModal() {
   els.fortifyCount.textContent = els.fortifyRange.value;
   els.fortifyCancel.classList.add('hidden');
   els.fortifyModal.classList.remove('hidden');
+}
+
+/** Se c’è un’invasione da completare, riapri il modal (evita soft-lock). */
+function ensureInvasionUi() {
+  if (!state?.pendingInvasion) return;
+  if (!isMyTurn()) return;
+  if (!els.fortifyModal.classList.contains('hidden') && moveModalMode === 'invasion') return;
+  openInvasionModal();
 }
 
 els.fortifyRange.addEventListener('input', () => {
@@ -746,6 +886,19 @@ els.fortifyConfirm.addEventListener('click', () => {
 });
 
 
+function refreshMapOnly() {
+  if (!state) return;
+  ui.highlightIds = computeHighlights(state, ui);
+  renderMap(els.map, state, ui, onTerritoryClick);
+}
+
+ui.onHoverRider = (territoryId) => {
+  const next = territoryId || null;
+  if (ui.hoverRiderTerritoryId === next) return;
+  ui.hoverRiderTerritoryId = next;
+  refreshMapOnly();
+};
+
 function refresh() {
   if (!state) {
     els.mapHint.textContent = 'Nuova partita dalla home.';
@@ -755,10 +908,12 @@ function refresh() {
   syncBrandLogo(!!state.vanillaMode);
   ui.highlightIds = computeHighlights(state, ui);
   renderMap(els.map, state, ui, onTerritoryClick);
-  renderHud(els, state, ui);
+  renderHud(els, state, ui, serverNowMs());
   renderActions(els.actions, state, ui);
+  syncLiveCombatDice(els, state, ui);
   updateHint();
   checkOverlay();
+  ensureInvasionUi();
 }
 
 function updateHint() {
@@ -776,7 +931,47 @@ function updateHint() {
     return;
   }
   if (!isMyTurn()) {
+    if (state.pendingBastion && localId() === state.pendingBastion.defenderId) {
+      els.mapHint.textContent = 'Attacco in corso — rispondi nel pannello azioni (Bastione).';
+      return;
+    }
+    if (!state.vanillaMode && state.responseWindow) {
+      els.mapHint.textContent = 'Finestra stack: rispondi con carte Instant o Combat dalla mano.';
+      return;
+    }
     els.mapHint.textContent = `Turno ${state.players[pid].name}…`;
+    return;
+  }
+  if (state.pendingInvasion && isMyTurn()) {
+    els.mapHint.textContent =
+      'Conquista: scegli quante armate lasciare nella zona conquistata (finestra Invasione).';
+    return;
+  }
+  if (state.pendingCast && state.pendingCast.playerId === localId()) {
+    els.mapHint.textContent = 'Conferma o annulla il lancio nel pannello centrale.';
+    return;
+  }
+  if (!state.vanillaMode && state.responseWindow && state.combatContext) {
+    const kind = state.responseWindow.kind;
+    if (kind === 'combat_counter') {
+      els.mapHint.textContent = 'Carta combat in stack: Negare/Sciacallo ora, o attendi il nuovo risultato.';
+    } else {
+      const ctx = state.combatContext;
+      els.mapHint.textContent = `Combattimento (−${ctx.attLossPreview ?? '?'} att / −${ctx.defLossPreview ?? '?'} dif): solo chi perde truppe può usare carte combat verdi.`;
+    }
+    return;
+  }
+  if (!state.vanillaMode && state.responseWindow) {
+    const kind = state.responseWindow.kind === 'combat' ? 'combattimento' : 'azione';
+    els.mapHint.textContent = `Finestra ${kind}: Instant/Combat dalla mano (timer stack).`;
+    return;
+  }
+  if (state.combatContext) {
+    els.mapHint.textContent = 'Combattimento in corso — attendi chiusura finestra stack.';
+    return;
+  }
+  if (state.pendingRecycle) {
+    els.mapHint.textContent = 'Riciclaggio: scegli una carta da scambiare o premi Passa.';
     return;
   }
   if (state.pendingDrawAfterDiscard) {
@@ -802,14 +997,28 @@ function updateHint() {
     els.mapHint.textContent = 'Scegli un tuo territorio per +2 armate.';
     return;
   }
-  if (ui.mode === 'card_raid') {
-    els.mapHint.textContent = 'Scegli un territorio nemico adiacente ai tuoi (>1 armata).';
+  if (ui.mode === 'card_supplies') {
+    els.mapHint.textContent = 'Approvvigionamenti: scegli un tuo territorio per +4 armate.';
+    return;
+  }
+  if (ui.mode === 'card_isolation') {
+    els.mapHint.textContent = 'Isolamento: scegli un territorio da bloccare.';
+    return;
+  }
+  if (ui.mode === 'card_betrayal') {
+    els.mapHint.textContent = 'Tradimento: scegli un territorio nemico con esattamente 1 armata.';
+    return;
+  }
+  if (ui.mode === 'card_teleport') {
+    els.mapHint.textContent = ui.marchFrom
+      ? 'Teletrasporto: scegli destinazione (anche non adiacente).'
+      : 'Teletrasporto: scegli territorio di partenza.';
     return;
   }
   if (ui.mode === 'card_forced_march') {
     els.mapHint.textContent = ui.marchFrom
       ? 'Scegli destinazione adiacente.'
-      : 'Marcia forzata: scegli territorio di partenza.';
+      : 'Marcia: scegli territorio di partenza.';
     return;
   }
   if (state.phase === 'reinforce') {
@@ -817,7 +1026,11 @@ function updateHint() {
       state.vanillaMode && state.players[pid].hand.length >= 3
         ? ' Puoi scambiare set di 3 carte dalla mano.'
         : '';
-    els.mapHint.textContent = `Clicca i tuoi territori per piazzare ${state.reinforcementsRemaining} rinforzi.${tradeHint}`;
+    if (state.reinforcementsRemaining <= 0) {
+      els.mapHint.textContent = `Tutti i rinforzi piazzati — premi Fine rinforzi.${tradeHint}`;
+    } else {
+      els.mapHint.textContent = `Clicca i tuoi territori per piazzare ${state.reinforcementsRemaining} rinforzi.${tradeHint}`;
+    }
     return;
   }
   if (state.phase === 'attack') {
@@ -827,14 +1040,9 @@ function updateHint() {
         : 'Seleziona un tuo territorio con ≥2 armate, poi il bersaglio. Conquista = 1 carta territorio.';
       return;
     }
-    const cardHint =
-      ui.selectedCardIndex != null
-        ? ` Carta combat selezionata: ${CARDS[state.players[pid].hand[ui.selectedCardIndex]]?.name}.`
-        : ' Seleziona una carta combat prima di attaccare (opzionale).';
-    els.mapHint.textContent =
-      (ui.selectedId
-        ? `Attacca da ${TERRITORIES[ui.selectedId].name}: clicca un nemico adiacente.`
-        : 'Seleziona un tuo territorio con ≥2 armate, poi il bersaglio.') + cardHint;
+    els.mapHint.textContent = ui.selectedId
+      ? `Attacca da ${TERRITORIES[ui.selectedId].name}: clicca un nemico adiacente.`
+      : 'Seleziona un tuo territorio con ≥2 armate, poi il bersaglio.';
     return;
   }
   if (state.phase === 'fortify') {
@@ -859,10 +1067,14 @@ function checkOverlay() {
 function onTerritoryClick(id) {
   if (busy || !state) return;
   const pid = state.currentPlayerId;
-  if (!isMyTurn() || state.phase === 'game_over') return;
+  if (state.phase === 'game_over') return;
+  if (state.pendingChoice && localId() === state.pendingChoice.actorId) return;
+
   if (state.pendingDrawAfterDiscard) return;
   if (state.pendingInvasion) return;
   if (!els.fortifyModal.classList.contains('hidden')) return;
+  if (!state.vanillaMode && (state.responseWindow || state.combatContext || state.pendingCast)) return;
+  if (!isMyTurn()) return;
 
   if (state.phase === 'setup') {
     if (state.territories[id].owner !== pid) return;
@@ -870,26 +1082,65 @@ function onTerritoryClick(id) {
     return;
   }
 
-  if (ui.mode === 'card_recruit') {
+  if (ui.mode === 'card_recruit' || ui.mode === 'card_supplies') {
     if (state.territories[id].owner !== pid) return;
-    dispatch({
-      type: 'PLAY_ACTION_CARD',
+    const payload = {
       handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
       territoryId: id,
-    });
-    ui.mode = null;
-    ui.selectedCardIndex = null;
+      riderTerritoryId: id,
+    };
+    clearCardSelection();
+    playActionCard(payload, { ai: true });
     return;
   }
 
-  if (ui.mode === 'card_raid') {
-    dispatch({
-      type: 'PLAY_ACTION_CARD',
+  if (ui.mode === 'card_isolation') {
+    const payload = {
       handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
       territoryId: id,
-    });
-    ui.mode = null;
-    ui.selectedCardIndex = null;
+    };
+    clearCardSelection();
+    playActionCard(payload, { ai: true });
+    return;
+  }
+
+  if (ui.mode === 'card_betrayal') {
+    const t = state.territories[id];
+    if (!t || t.owner === pid || t.armies !== 1) return;
+    const payload = {
+      handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
+      territoryId: id,
+    };
+    clearCardSelection();
+    playActionCard(payload, { ai: true });
+    return;
+  }
+
+  if (ui.mode === 'card_teleport') {
+    if (!ui.marchFrom) {
+      if (state.territories[id].owner !== pid || state.territories[id].armies < 2) return;
+      ui.marchFrom = id;
+      refresh();
+      return;
+    }
+    const from = ui.marchFrom;
+    const max = state.territories[from].armies - 1;
+    const payload = {
+      handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
+      from,
+      to: id,
+      armies: max,
+    };
+    clearCardSelection();
+    playActionCard(payload, { ai: true });
     return;
   }
 
@@ -901,17 +1152,18 @@ function onTerritoryClick(id) {
       return;
     }
     const from = ui.marchFrom;
+    if (state.territories[id].owner !== pid || !areAdjacent(from, id)) return;
     const max = Math.min(3, state.territories[from].armies - 1);
-    dispatch({
-      type: 'PLAY_ACTION_CARD',
+    const payload = {
       handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
       from,
       to: id,
       armies: max,
-    });
-    ui.mode = null;
-    ui.marchFrom = null;
-    ui.selectedCardIndex = null;
+    };
+    clearCardSelection();
+    playActionCard(payload, { ai: true });
     return;
   }
 
@@ -942,29 +1194,25 @@ function onTerritoryClick(id) {
       return;
     }
     if (t.owner !== pid && areAdjacent(ui.selectedId, id)) {
-      if (ui.selectedCardIndex != null) {
-        const card = CARDS[state.players[pid].hand[ui.selectedCardIndex]];
-        if (card?.type === 'combat') {
-          dispatch({ type: 'SET_COMBAT_CARD', handIndex: ui.selectedCardIndex }, { skipWait: true, silent: true });
-        }
-      }
       const fromId = ui.selectedId;
       dispatch({
         type: 'ATTACK',
         from: fromId,
         to: id,
         attackDice: Math.min(3, state.territories[fromId].armies - 1),
-      });
+      }, { ai: true });
       ui.selectedCardIndex = null;
       if (!onlineRoom || onlineRoom.status === 'lobby') {
-        if (state.lastBattle?.conquered) ui.selectedId = id;
+        if (state.lastBattle?.conquered && !state.combatContext) ui.selectedId = id;
         else if (state.territories[fromId]?.owner !== pid || state.territories[fromId].armies < 2) {
           ui.selectedId = null;
         }
-        void (async () => {
-          await maybeShowDice();
-          if (state.pendingInvasion) openInvasionModal();
-        })();
+        if (!state.combatContext) {
+          void (async () => {
+            await maybeShowDice();
+            if (state.pendingInvasion) openInvasionModal();
+          })();
+        }
       } else {
         ui.selectedId = id;
       }
@@ -996,10 +1244,11 @@ function onTerritoryClick(id) {
 }
 
 ui.onCardClick = (index, card) => {
-  if (!isMyTurn()) return;
+  if (!state || state.phase === 'game_over') return;
+  clearCardHover(ui);
 
   if (state.vanillaMode && card.type === 'classic') {
-    if (state.phase !== 'reinforce') return;
+    if (!isMyTurn() || state.phase !== 'reinforce') return;
     const sel = ui.classicCardSelection || (ui.classicCardSelection = []);
     const pos = sel.indexOf(index);
     if (pos >= 0) sel.splice(pos, 1);
@@ -1008,12 +1257,38 @@ ui.onCardClick = (index, card) => {
     return;
   }
 
+  const me = localId();
+  if (!state.vanillaMode && (state.responseWindow || state.pendingCast)) {
+    if (state.pendingCast?.playerId === me) return;
+    if (card.timing === 'instant' || card.timing === 'combat') {
+      const canStart = getLegalActions(state, me).some(
+        (a) => a.type === 'CAST_START' && !a.fromKit && a.handIndex === index,
+      );
+      if (canStart) {
+        dispatchCast({ type: 'CAST_START', handIndex: index }, { ai: true });
+      }
+      return;
+    }
+    return;
+  }
+
+  if (!isMyTurn()) return;
+
+  if (state.pendingChoice && localId() === state.pendingChoice.actorId) return;
+
   if (state.pendingDrawAfterDiscard) {
     dispatch({ type: 'DISCARD_FOR_DRAW', handIndex: index });
     return;
   }
 
-  if (card.type === 'combat') {
+  if (state.pendingRecycle) {
+    dispatch({ type: 'RECYCLE_CARD', handIndex: index });
+    ui.selectedCardIndex = null;
+    ui.mode = null;
+    return;
+  }
+
+  if (card.timing === 'combat') {
     if (state.phase !== 'attack') return;
     ui.selectedCardIndex = ui.selectedCardIndex === index ? null : index;
     ui.mode = null;
@@ -1021,19 +1296,189 @@ ui.onCardClick = (index, card) => {
     return;
   }
 
+  if (state.responseWindow || state.combatContext || state.pendingCast) return;
+
   ui.selectedCardIndex = index;
-  if (card.effect.type === 'add_armies') {
-    ui.mode = 'card_recruit';
-  } else if (card.effect.type === 'damage_adjacent_enemy') {
-    ui.mode = 'card_raid';
-  } else if (card.effect.type === 'free_move') {
+  ui.selectedKitIndex = null;
+  const fx = card.effect?.type;
+  if (fx === 'add_armies') {
+    ui.mode = card.effect.split ? 'card_supplies' : 'card_recruit';
+  } else if (fx === 'free_move') {
     ui.mode = 'card_forced_march';
     ui.marchFrom = null;
-  } else if (card.effect.type === 'draw') {
-    dispatch({ type: 'PLAY_ACTION_CARD', handIndex: index });
+  } else if (fx === 'teleport_move') {
+    ui.mode = 'card_teleport';
+    ui.marchFrom = null;
+  } else if (fx === 'isolation') {
+    ui.mode = 'card_isolation';
+  } else if (fx === 'betrayal') {
+    ui.mode = 'card_betrayal';
+  } else if (fx === 'draw' || fx === 'surveil' || fx === 'sabotage_discard' || fx === 'steal_card' ||
+    fx === 'plague' || fx === 'omniscience' || fx === 'resurrection' || fx === 'chaos_events' ||
+    fx === 'arcana' || fx === 'turncoat' || fx === 'double_mandate') {
+    playActionCard({ handIndex: index }, { ai: true });
     ui.selectedCardIndex = null;
     ui.mode = null;
     return;
+  }
+  refresh();
+};
+
+function playKitOrHandCard(opts, card) {
+  const fromKit = !!opts.fromKit;
+  const index = fromKit ? opts.kitIndex : opts.handIndex;
+  const fx = card.effect?.type;
+  if (fx === 'add_armies') {
+    ui.mode = card.effect.split ? 'card_supplies' : 'card_recruit';
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else if (fx === 'free_move') {
+    ui.mode = 'card_forced_march';
+    ui.marchFrom = null;
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else if (fx === 'teleport_move') {
+    ui.mode = 'card_teleport';
+    ui.marchFrom = null;
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else if (fx === 'isolation') {
+    ui.mode = 'card_isolation';
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else if (fx === 'betrayal') {
+    ui.mode = 'card_betrayal';
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else {
+    dispatch(
+      {
+        type: 'PLAY_ACTION_CARD',
+        ...(fromKit ? { fromKit: true, kitIndex: index } : { handIndex: index }),
+      },
+      { ai: true },
+    );
+    ui.selectedCardIndex = null;
+    ui.selectedKitIndex = null;
+    ui.mode = null;
+    return;
+  }
+  refresh();
+}
+
+ui.onKitCardClick = (index, card) => {
+  if (!state || !state.sandboxMode || state.phase === 'game_over') return;
+  clearCardHover(ui);
+  const me = localId();
+
+  if (state.responseWindow || state.pendingCast) {
+    if (state.pendingCast?.playerId === me) return;
+    if (card.timing === 'instant' || card.timing === 'combat') {
+      const canStart = getLegalActions(state, me).some(
+        (a) => a.type === 'CAST_START' && a.fromKit && a.kitIndex === index,
+      );
+      if (canStart) {
+        dispatchCast({ type: 'CAST_START', fromKit: true, kitIndex: index }, { ai: true });
+      }
+    }
+    return;
+  }
+
+  if (!isMyTurn()) return;
+  if (state.pendingChoice && me === state.pendingChoice.actorId) return;
+
+  if (card.timing === 'combat') {
+    if (state.phase !== 'attack') return;
+    ui.selectedKitIndex = ui.selectedKitIndex === index ? null : index;
+    ui.selectedCardIndex = null;
+    ui.mode = null;
+    refresh();
+    return;
+  }
+
+  if (state.responseWindow || state.combatContext || state.pendingCast) return;
+  playKitOrHandCard({ fromKit: true, kitIndex: index }, card);
+};
+
+ui.onSandboxToggleRelic = (relicId) => {
+  if (!state?.sandboxMode) return;
+  dispatch({ type: 'SANDBOX_TOGGLE_RELIC', relicId, playerId: localId() });
+};
+
+ui.onSandboxToggleEvent = (eventId) => {
+  if (!state?.sandboxMode) return;
+  dispatch({ type: 'SANDBOX_TOGGLE_EVENT', eventId, playerId: localId() });
+};
+
+ui.onCastConfirm = () => {
+  const pc = state?.pendingCast;
+  const payload = { dieIndex: pc?.targets?.dieIndex };
+  dispatchCast({ type: 'CAST_CONFIRM', ...payload }, { ai: true });
+};
+
+ui.onSelectCastDie = (dieIndex) => {
+  if (!state?.pendingCast) return;
+  if (localId() !== state.pendingCast.playerId) return;
+  // Un solo click: scegli il dado e conferma il lancio.
+  dispatchCast({ type: 'CAST_CONFIRM', dieIndex }, { ai: true });
+};
+
+ui.onPassStack = () => {
+  if (!state?.responseWindow || state.pendingCast) return;
+  dispatchCast({ type: 'PASS_STACK' }, { ai: true });
+};
+
+ui.onStartCast = ({ fromKit, handIndex, kitIndex } = {}) => {
+  if (fromKit) {
+    if (kitIndex == null) return;
+    dispatchCast({ type: 'CAST_START', fromKit: true, kitIndex }, { ai: true });
+    return;
+  }
+  if (handIndex == null) return;
+  dispatchCast({ type: 'CAST_START', handIndex }, { ai: true });
+};
+
+ui.onCastCancel = () => {
+  dispatchCast({ type: 'CAST_CANCEL' });
+};
+
+ui.onCancelTargeting = () => {
+  ui.mode = null;
+  ui.selectedCardIndex = null;
+  ui.selectedKitIndex = null;
+  ui.marchFrom = null;
+  ui.selectedId = null;
+  ui.hoverRiderTerritoryId = null;
+  if (moveModalMode === 'fortify') {
+    pendingFortify = null;
+    moveModalMode = null;
+    els.fortifyModal?.classList.add('hidden');
+    els.fortifyCancel?.classList.remove('hidden');
   }
   refresh();
 };
@@ -1050,7 +1495,7 @@ ui.onTradeClassic = () => {
 };
 
 ui.onEndPhase = () => {
-  if (!isMyTurn()) return;
+  if (!isMyTurn() || !canEndPhaseNow(state)) return;
   dispatch({ type: 'END_PHASE' }, { ai: true });
   ui.selectedId = null;
   ui.selectedCardIndex = null;
@@ -1058,9 +1503,21 @@ ui.onEndPhase = () => {
   ui.mode = null;
 };
 
-ui.onClearCombatCard = () => {
-  ui.selectedCardIndex = null;
-  dispatch({ type: 'SET_COMBAT_CARD', handIndex: null }, { skipWait: true });
+ui.onBastionChoice = (use) => {
+  if (!state?.pendingBastion) return;
+  if (localId() !== state.pendingBastion.defenderId) return;
+  dispatch({ type: 'RESOLVE_BASTION', use }, { ai: true });
+};
+
+ui.onResolveChoice = (payload) => {
+  if (!state?.pendingChoice) return;
+  if (localId() !== state.pendingChoice.actorId) return;
+  dispatch({ type: 'RESOLVE_CHOICE', playerId: localId(), ...payload }, { ai: true });
+};
+
+ui.onSkipRecycle = () => {
+  if (!state?.pendingRecycle || !isMyTurn()) return;
+  dispatch({ type: 'SKIP_RECYCLE' });
 };
 
 function maybeRunAi() {
@@ -1069,7 +1526,41 @@ function maybeRunAi() {
     if (state) refresh();
     return;
   }
-  if (state.players[state.currentPlayerId].isHuman) return;
+
+  processStackPhase(state);
+
+  if (state.pendingChoice) {
+    const actor = state.pendingChoice.actorId;
+    if (state.players[actor]?.isHuman) {
+      refresh();
+      return;
+    }
+    processChoiceDraft(state);
+    refresh();
+    maybeRunAi();
+    return;
+  }
+
+  if (state.pendingCast && state.players[state.pendingCast.playerId]?.isHuman) {
+    refresh();
+    return;
+  }
+  if (state.responseWindow) {
+    const humanCanRespond = state.playerOrder.some((id) => {
+      if (!state.players[id].isHuman) return false;
+      return getLegalActions(state, id).some((a) => a.type === 'CAST_START' || a.type === 'CAST_CONFIRM');
+    });
+    if (humanCanRespond) {
+      refresh();
+      return;
+    }
+    processStackPhase(state);
+  }
+
+  if (state.players[state.currentPlayerId].isHuman) {
+    refresh();
+    return;
+  }
   if (busy) return;
 
   els.mapHint.textContent = state.phase === 'setup'
@@ -1088,7 +1579,7 @@ function maybeRunAi() {
       } else {
         runAiTurn(state);
         const afterKey = battleKey(state.lastBattle);
-        if (afterKey && afterKey !== beforeKey && afterKey !== lastShownBattleKey) {
+        if (afterKey && afterKey !== beforeKey && afterKey !== lastShownBattleKey && !state.lastBattle?.pending) {
           refresh();
           await maybeShowDice();
         }
@@ -1105,6 +1596,8 @@ function maybeRunAi() {
 }
 
 function returnToHome() {
+  stopStackClock();
+  resetUi();
   state = null;
   onlineRoom = null;
   joiningRoomId = null;
@@ -1113,7 +1606,11 @@ function returnToHome() {
   net.close();
   history.replaceState(null, '', location.pathname);
   els.overlay.classList.add('hidden');
+  els.diceOverlay?.classList.add('hidden');
+  els.fortifyModal?.classList.add('hidden');
+  els.fortifyCancel?.classList.remove('hidden');
   els.app?.classList.remove('vanilla-mode');
+  els.app?.classList.remove('sandbox-mode');
   syncBrandLogo(false);
   showHome();
 }
@@ -1180,17 +1677,28 @@ els.setupModeLocal?.addEventListener('click', () => {
   renderSetup();
 });
 els.setupModeOnline?.addEventListener('click', () => {
+  if (sandboxMode) return;
   lobbyMode = 'online';
   renderSetup();
 });
 els.setupDraw?.addEventListener('click', () => {
-  if (vanillaMode) return;
+  if (vanillaMode || sandboxMode) return;
   drawEveryTurn = !drawEveryTurn;
   renderSetup();
 });
 els.setupVanilla?.addEventListener('click', () => {
+  if (sandboxMode) return;
   vanillaMode = !vanillaMode;
   if (vanillaMode) drawEveryTurn = false;
+  renderSetup();
+});
+els.setupSandbox?.addEventListener('click', () => {
+  sandboxMode = !sandboxMode;
+  if (sandboxMode) {
+    vanillaMode = false;
+    drawEveryTurn = false;
+    lobbyMode = 'local';
+  }
   renderSetup();
 });
 els.setupName?.addEventListener('change', persistLobby);
@@ -1215,10 +1723,25 @@ function setRailOpen(open) {
   btnRail?.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
-btnRail?.addEventListener('click', () => {
+btnRail?.addEventListener('click', (ev) => {
+  ev.stopPropagation();
   setRailOpen(!appEl.classList.contains('rail-open'));
 });
-railBackdrop?.addEventListener('click', () => setRailOpen(false));
+
+const railClose = document.getElementById('rail-close');
+const railDrawer = document.getElementById('rail-drawer');
+
+railClose?.addEventListener('click', (ev) => {
+  ev.preventDefault();
+  ev.stopPropagation();
+  setRailOpen(false);
+});
+
+railBackdrop?.addEventListener('click', (ev) => {
+  ev.preventDefault();
+  setRailOpen(false);
+});
+
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') {
     setRailOpen(false);
@@ -1233,10 +1756,15 @@ els.playerMission.addEventListener('click', () => {
 els.opponentPanel.addEventListener('click', (ev) => {
   const row = ev.target.closest('[data-opp-id]');
   if (!row) return;
+  ev.stopPropagation();
   const id = row.dataset.oppId;
   ui.expandedOpponentId = ui.expandedOpponentId === id ? null : id;
-  refresh();
+  els.opponentPanel.querySelectorAll('.opp-card[data-opp-id]').forEach((el) => {
+    el.classList.toggle('is-open', el.dataset.oppId === ui.expandedOpponentId);
+  });
 });
+
+railDrawer?.addEventListener('click', (ev) => ev.stopPropagation());
 
 document.querySelector('.hud-stack')?.addEventListener('click', (ev) => {
   const btn = ev.target.closest('.hud-fold-toggle');
@@ -1247,6 +1775,141 @@ document.querySelector('.hud-stack')?.addEventListener('click', (ev) => {
   const open = !fold.classList.contains('is-open');
   fold.classList.toggle('is-open', open);
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+
+els.sandboxFloatToggle?.addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  ui.sandboxExpanded = !ui.sandboxExpanded;
+  refresh();
+});
+
+(function bindSandboxFloatDrag() {
+  const root = els.sandboxFloat;
+  const handle = els.sandboxFloatHeader;
+  if (!root || !handle) return;
+
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let origLeft = 0;
+  let origTop = 0;
+
+  const onMove = (ev) => {
+    if (!dragging) return;
+    const map = els.map?.closest('.map-panel') || root.parentElement;
+    if (!map) return;
+    const bounds = map.getBoundingClientRect();
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    let left = origLeft + dx;
+    let top = origTop + dy;
+    const maxL = Math.max(0, bounds.width - root.offsetWidth);
+    const maxT = Math.max(0, bounds.height - root.offsetHeight);
+    left = Math.min(Math.max(0, left), maxL);
+    top = Math.min(Math.max(0, top), maxT);
+    root.style.left = `${left}px`;
+    root.style.top = `${top}px`;
+    root.style.right = 'auto';
+  };
+
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+  };
+
+  handle.addEventListener('pointerdown', (ev) => {
+    if (ev.target.closest('.sandbox-float-toggle')) return;
+    if (ev.button != null && ev.button !== 0) return;
+    dragging = true;
+    const rect = root.getBoundingClientRect();
+    const map = els.map?.closest('.map-panel') || root.parentElement;
+    const bounds = map.getBoundingClientRect();
+    startX = ev.clientX;
+    startY = ev.clientY;
+    origLeft = rect.left - bounds.left;
+    origTop = rect.top - bounds.top;
+    root.style.left = `${origLeft}px`;
+    root.style.top = `${origTop}px`;
+    root.style.right = 'auto';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    ev.preventDefault();
+  });
+})();
+
+const TRAY_H_KEY = 'krisiko.trayH';
+const TRAY_H_DEFAULT = 176;
+const TRAY_H_SANDBOX_DEFAULT = 248;
+const TRAY_H_MIN = 156;
+
+function trayHeightMax() {
+  return Math.floor(window.innerHeight * 0.55);
+}
+
+function applyTrayHeight(px) {
+  const h = Math.max(TRAY_H_MIN, Math.min(trayHeightMax(), Math.round(px)));
+  document.documentElement.style.setProperty('--tray-h', `${h}px`);
+  if (els.app) els.app.style.setProperty('--tray-h', `${h}px`);
+  return h;
+}
+
+function initTrayResize() {
+  const tray = els.playerTray;
+  if (!tray || tray.querySelector('.tray-resize-handle')) return;
+
+  const handle = document.createElement('div');
+  handle.className = 'tray-resize-handle';
+  handle.title = 'Trascina per ridimensionare la barra';
+  handle.setAttribute('role', 'separator');
+  handle.setAttribute('aria-orientation', 'horizontal');
+  tray.prepend(handle);
+
+  const saved = Number(localStorage.getItem(TRAY_H_KEY));
+  const sandbox = els.app?.classList.contains('sandbox-mode');
+  const initial =
+    Number.isFinite(saved) && saved >= TRAY_H_MIN
+      ? saved
+      : sandbox
+        ? TRAY_H_SANDBOX_DEFAULT
+        : TRAY_H_DEFAULT;
+  applyTrayHeight(initial);
+
+  let dragging = false;
+  let startY = 0;
+  let startH = 0;
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button !== 0) return;
+    dragging = true;
+    startY = e.clientY;
+    startH = tray.getBoundingClientRect().height;
+    handle.setPointerCapture(e.pointerId);
+    document.body.classList.add('is-tray-resizing');
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    applyTrayHeight(startH + (startY - e.clientY));
+  });
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('is-tray-resizing');
+    const h = Math.round(tray.getBoundingClientRect().height);
+    localStorage.setItem(TRAY_H_KEY, String(h));
+  };
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+}
+
+// Re-apply default when entering sandbox without a saved taller size is optional;
+// always re-read saved on init.
+initTrayResize();
+window.addEventListener('resize', () => {
+  const cur = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tray-h'));
+  if (Number.isFinite(cur)) applyTrayHeight(cur);
 });
 
 const roomParam = new URLSearchParams(location.search).get('room');

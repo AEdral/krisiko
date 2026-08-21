@@ -2,9 +2,101 @@ import {
   applyAction,
   getPlayerTerritories,
   areAdjacent,
-  CARDS,
+  getCard,
+  isCombatCard,
+  getLegalActions,
+  STACK_WINDOW_MS,
+  processChoiceDraft,
 } from '../engine/game.js';
 import { findClassicTradeSet } from '../data/classic-cards.js';
+
+function confirmAiCast(state, pid, nowMs) {
+  const pc = state.pendingCast;
+  if (!pc || pc.playerId !== pid) return;
+  if (pc.needsDiePick && pc.targets?.dieIndex == null && state.combatContext) {
+    const ctx = state.combatContext;
+    const isAtt = pid === ctx.attackerId;
+    const dice = isAtt ? ctx.rawAttDice : ctx.rawDefDice;
+    applyAction(state, {
+      type: 'SET_CAST_DIE',
+      dieIndex: state.rng.int(dice.length),
+      playerId: pid,
+      nowMs,
+    });
+  }
+  applyAction(state, { type: 'CAST_CONFIRM', playerId: pid, nowMs });
+}
+
+/** Resolve one interactive choice for AI/non-human actor. Returns true if state changed. */
+export function processArcanaDraft(state) {
+  return processChoiceDraft(state);
+}
+
+/** Advance stack timer and AI cast confirm/responses. Returns true if state changed. */
+export function processStackPhase(state, opts = {}) {
+  if (state.vanillaMode) return false;
+  const nowMs = opts.nowMs ?? Date.now();
+  const beforeWindow = !!state.responseWindow;
+  const beforeCombat = !!state.combatContext;
+  const beforePending = !!state.pendingCast;
+
+  applyAction(state, { type: 'TICK_STACK', nowMs });
+
+  if (state.pendingCast) {
+    const pc = state.pendingCast;
+    if (state.players[pc.playerId].isHuman) return beforePending !== !!state.pendingCast;
+    confirmAiCast(state, pc.playerId, nowMs);
+    return true;
+  }
+
+  if (!state.responseWindow) {
+    return beforeWindow || beforeCombat !== !!state.combatContext;
+  }
+
+  for (const pid of state.playerOrder) {
+    if (state.players[pid].isHuman) continue;
+    const starts = getLegalActions(state, pid).filter((a) => a.type === 'CAST_START');
+    if (!starts.length) continue;
+
+    const neg = starts.find((a) => getCard(state.players[pid].hand[a.handIndex])?.effect?.type === 'negate');
+    if (neg && state.rng.int(100) < 28) {
+      applyAction(state, { ...neg, playerId: pid, nowMs });
+      confirmAiCast(state, pid, nowMs);
+      return true;
+    }
+
+    if (state.responseWindow?.kind === 'combat') {
+      const combat = starts.find((a) => isCombatCard(getCard(state.players[pid].hand[a.handIndex])));
+      if (combat && state.rng.int(100) < 35) {
+        applyAction(state, { ...combat, playerId: pid, nowMs });
+        confirmAiCast(state, pid, nowMs);
+        return true;
+      }
+    }
+  }
+
+  const humanCanRespond = state.playerOrder.some((id) => {
+    if (!state.players[id].isHuman) return false;
+    return getLegalActions(state, id).some((a) => a.type === 'CAST_START' || a.type === 'CAST_CONFIRM');
+  });
+  if (!humanCanRespond) {
+    for (const pid of state.playerOrder) {
+      if (state.players[pid].isHuman) continue;
+      if (state.responseWindow.passedPlayerIds?.includes(pid)) continue;
+      applyAction(state, { type: 'PASS_STACK', playerId: pid, nowMs });
+      return true;
+    }
+  }
+
+  return beforeWindow !== !!state.responseWindow;
+}
+
+function drainStackForAi(state) {
+  let guard = 0;
+  while (guard++ < 24 && processStackPhase(state)) {
+    if (state.pendingCast && state.players[state.pendingCast.playerId]?.isHuman) break;
+  }
+}
 
 /**
  * Simple heuristic AI: reinforce fronts, attack when favored, fortify borders, play easy cards.
@@ -20,11 +112,32 @@ export function runAiTurn(state, opts = {}) {
 
   while (steps++ < maxSteps) {
     if (state.phase === 'game_over') break;
+
+    drainStackForAi(state);
+    if (processChoiceDraft(state)) continue;
+    if (state.pendingChoice) break;
+    if (state.responseWindow || state.combatContext || state.pendingCast) break;
+
+    if (state.pendingBastion) {
+      const defId = state.pendingBastion.defenderId;
+      if (state.players[defId].isHuman) break;
+      applyAction(state, {
+        type: 'RESOLVE_BASTION',
+        use: state.territories[state.pendingBastion.to].armies <= 2,
+      });
+      continue;
+    }
+
     if (state.players[state.currentPlayerId].isHuman) break;
     if (state.currentPlayerId !== pid && state.phase !== 'game_over') break;
 
     if (state.pendingDrawAfterDiscard) {
       applyAction(state, { type: 'DISCARD_FOR_DRAW', handIndex: 0 });
+      continue;
+    }
+
+    if (state.pendingRecycle) {
+      applyAction(state, { type: 'SKIP_RECYCLE' });
       continue;
     }
 
@@ -34,7 +147,6 @@ export function runAiTurn(state, opts = {}) {
 
     if (state.phase === 'setup') {
       aiSetupPlace(state);
-      // After one place, turn may switch — exit so caller can refresh / continue
       break;
     }
 
@@ -45,6 +157,10 @@ export function runAiTurn(state, opts = {}) {
 
     if (state.phase === 'attack') {
       if (attacks === 0 && !state.vanillaMode) maybePlayActionCard(state);
+      drainStackForAi(state);
+      if (processChoiceDraft(state)) continue;
+      if (state.pendingChoice) break;
+      if (state.responseWindow || state.combatContext) break;
       if (attacks >= maxAttacks) {
         applyAction(state, { type: 'END_PHASE' });
         continue;
@@ -54,6 +170,9 @@ export function runAiTurn(state, opts = {}) {
         applyAction(state, { type: 'END_PHASE' });
       } else {
         attacks += 1;
+        drainStackForAi(state);
+        if (processChoiceDraft(state)) continue;
+        if (state.pendingChoice) break;
       }
       continue;
     }
@@ -67,7 +186,6 @@ export function runAiTurn(state, opts = {}) {
     break;
   }
 
-  // Safety: never leave the AI mid-turn (not during setup — setup is one place per call)
   if (state.phase === 'setup') return state;
 
   while (
@@ -76,8 +194,26 @@ export function runAiTurn(state, opts = {}) {
     !state.players[pid].isHuman &&
     steps++ < maxSteps + 50
   ) {
+    drainStackForAi(state);
+    if (processChoiceDraft(state)) continue;
+    if (state.pendingChoice) break;
+    if (state.responseWindow || state.combatContext || state.pendingCast) break;
+
+    if (state.pendingBastion) {
+      const defId = state.pendingBastion.defenderId;
+      if (state.players[defId].isHuman) break;
+      applyAction(state, {
+        type: 'RESOLVE_BASTION',
+        use: state.territories[state.pendingBastion.to].armies <= 2,
+      });
+      continue;
+    }
     if (state.pendingDrawAfterDiscard) {
       applyAction(state, { type: 'DISCARD_FOR_DRAW', handIndex: 0 });
+      continue;
+    }
+    if (state.pendingRecycle) {
+      applyAction(state, { type: 'SKIP_RECYCLE' });
       continue;
     }
     if (state.vanillaMode && state.phase === 'reinforce' && aiClassicTrade(state)) {
@@ -154,10 +290,9 @@ function aiAttack(state) {
   const pid = state.currentPlayerId;
   const f = fronts(state, pid);
   const must =
-    state.activeEventId === 'chaos' &&
+    ((state.activeEventIds || []).includes('chaos') || state.activeEventId === 'chaos') &&
     !state.mustAttackSatisfied;
 
-  // Prefer favorable attacks; allow even fights to keep games moving
   let best = null;
   for (const front of f) {
     if (front.armies < 2) continue;
@@ -174,14 +309,6 @@ function aiAttack(state) {
   }
   if (!best) return false;
 
-  if (!state.vanillaMode) {
-    const hand = state.players[pid].hand;
-    const combatIdx = hand.findIndex((id) => CARDS[id]?.type === 'combat' && CARDS[id].effect.type !== 'def_high_die_bonus');
-    if (combatIdx >= 0 && best.score <= 3) {
-      applyAction(state, { type: 'SET_COMBAT_CARD', handIndex: combatIdx });
-    }
-  }
-
   applyAction(state, {
     type: 'ATTACK',
     from: best.from,
@@ -194,7 +321,6 @@ function aiAttack(state) {
 function aiFortify(state) {
   const pid = state.currentPlayerId;
   const owned = getPlayerTerritories(state, pid);
-  // Move from safe inland stacks to weakest front
   const f = fronts(state, pid);
   if (!f.length) return;
   f.sort((a, b) => a.armies - b.armies);
@@ -212,7 +338,6 @@ function aiFortify(state) {
     }
   }
   if (!donor || donorArmies < 2) {
-    // try any adjacent stronger front
     for (const tid of owned) {
       if (tid === weak) continue;
       if (!areAdjacent(tid, weak)) continue;
@@ -224,7 +349,6 @@ function aiFortify(state) {
   }
   if (!donor) return;
 
-  // Check adjacency / fortify rules via action attempt
   const move = Math.min(3, state.territories[donor].armies - 1);
   applyAction(state, { type: 'FORTIFY', from: donor, to: weak, armies: move });
 }
@@ -232,24 +356,26 @@ function aiFortify(state) {
 function maybePlayActionCard(state) {
   const pid = state.currentPlayerId;
   const hand = state.players[pid].hand;
-  const recruitIdx = hand.findIndex((id) => id === 'recruit');
+  const recruitIdx = hand.findIndex((id) => getCard(id)?.baseId === 'recruit');
   if (recruitIdx >= 0 && (state.phase === 'reinforce' || state.phase === 'attack')) {
     const f = fronts(state, pid);
     const tid = f.length
       ? [...f].sort((a, b) => a.armies - b.armies)[0].tid
       : getPlayerTerritories(state, pid)[0];
-    applyAction(state, { type: 'PLAY_ACTION_CARD', handIndex: recruitIdx, territoryId: tid });
+    applyAction(state, { type: 'PLAY_ACTION_CARD', handIndex: recruitIdx, territoryId: tid, riderTerritoryId: tid });
     return;
   }
-  const raidIdx = hand.findIndex((id) => id === 'raid');
-  if (raidIdx >= 0 && state.phase === 'attack') {
-    for (const front of fronts(state, pid)) {
-      for (const e of front.enemies) {
-        if (state.territories[e].armies > 1) {
-          applyAction(state, { type: 'PLAY_ACTION_CARD', handIndex: raidIdx, territoryId: e });
-          return;
-        }
-      }
-    }
+  const suppliesIdx = hand.findIndex((id) => getCard(id)?.baseId === 'supplies');
+  if (suppliesIdx >= 0 && (state.phase === 'reinforce' || state.phase === 'attack')) {
+    const f = fronts(state, pid);
+    const tid = f.length
+      ? [...f].sort((a, b) => a.armies - b.armies)[0].tid
+      : getPlayerTerritories(state, pid)[0];
+    applyAction(state, { type: 'PLAY_ACTION_CARD', handIndex: suppliesIdx, territoryId: tid, riderTerritoryId: tid });
+    return;
+  }
+  const sabotageIdx = hand.findIndex((id) => getCard(id)?.baseId === 'sabotage');
+  if (sabotageIdx >= 0 && state.phase === 'attack') {
+    applyAction(state, { type: 'PLAY_ACTION_CARD', handIndex: sabotageIdx });
   }
 }

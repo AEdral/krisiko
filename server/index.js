@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { handleNetMessage, parseNetPayload } from '../src/js/net/protocol.js';
 import { disconnect } from '../src/js/net/rooms.js';
+import { log } from '../src/js/net/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -36,6 +37,8 @@ function safeFile(urlPath) {
 }
 
 const server = http.createServer((req, res) => {
+  log.debug('http', `${req.method} ${req.url}`);
+
   if (req.method === 'GET' && (req.url === '/health' || req.url === '/healthz')) {
     res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('ok');
@@ -77,23 +80,36 @@ function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   ws.clientId = null;
   ws.roomId = null;
+  log.info('ws', 'connection', { ip: req.socket?.remoteAddress });
 
   ws.on('message', (raw) => {
     const msg = parseNetPayload(raw);
     if (!msg) {
+      log.warn('ws', 'invalid payload');
       send(ws, { type: 'error', message: 'Messaggio non valido.' });
       return;
     }
+    log.info('ws', `← ${msg.type}`, {
+      room: ws.roomId || msg.roomId || null,
+      client: ws.clientId,
+      action: msg.action?.type || msg.type,
+    });
     handleNetMessage(ws, msg, send);
   });
 
-  ws.on('close', () => disconnect(ws));
-  ws.on('error', () => disconnect(ws));
+  ws.on('close', () => {
+    log.info('ws', 'close', { client: ws.clientId, room: ws.roomId });
+    disconnect(ws);
+  });
+  ws.on('error', (err) => {
+    log.warn('ws', 'error', { message: err?.message, client: ws.clientId });
+    disconnect(ws);
+  });
 });
 
 server.listen(PORT, () => {
-  console.log(`Krisiko http://localhost:${PORT}`);
+  log.info('server', `Krisiko listening on :${PORT}`, { logLevel: process.env.LOG_LEVEL || 'info' });
 });

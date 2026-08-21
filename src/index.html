@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="css/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Orbitron:wght@600;700;800&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
 </head>
 <body>
   <div id="app">
@@ -76,6 +76,13 @@
             </span>
             <button type="button" id="setup-vanilla" class="setup-switch" aria-pressed="false">Off</button>
           </label>
+          <label class="setup-switch-row">
+            <span>
+              <strong>Sandbox</strong>
+              <span class="setup-switch-desc">Solo locale: armate già schierate, kit di tutte le carte, toggle reliquie/eventi.</span>
+            </span>
+            <button type="button" id="setup-sandbox" class="setup-switch" aria-pressed="false">Off</button>
+          </label>
         </div>
         <p class="lobby-error hidden" id="setup-error"></p>
         <div class="flow-actions">
@@ -130,7 +137,7 @@
         </h1>
       </div>
       <div class="top-meta" id="top-meta"></div>
-      <button type="button" id="btn-rail" class="btn-rail" aria-expanded="false" aria-controls="side-rail" title="Info partita">
+      <button type="button" id="btn-rail" class="btn-rail" aria-expanded="false" aria-controls="rail-drawer" title="Info partita">
         <span class="btn-rail-bars" aria-hidden="true"></span>
         <span class="sr-only">Apri pannello</span>
       </button>
@@ -138,6 +145,7 @@
     </header>
 
     <main class="layout">
+      <aside class="stack-panel hidden" id="stack-panel" aria-label="Stack carte"></aside>
       <section class="map-panel">
         <svg id="map" viewBox="172 119 745 503" preserveAspectRatio="xMidYMid meet" aria-label="Mappa Krisiko"></svg>
         <div class="map-zoom" role="group" aria-label="Zoom mappa">
@@ -146,18 +154,42 @@
           <button type="button" id="map-zoom-reset" class="btn btn-ghost" aria-label="Tutta la mappa" title="Tutta la mappa">1×</button>
         </div>
         <div class="map-hint" id="map-hint">Seleziona un territorio</div>
+        <div id="sandbox-float" class="sandbox-float hidden" aria-label="Pannello sandbox">
+          <div class="sandbox-float-header" id="sandbox-float-header">
+            <button type="button" class="sandbox-float-toggle" id="sandbox-float-toggle" aria-expanded="false">Sandbox</button>
+            <div class="sandbox-float-summary" id="sandbox-float-summary"></div>
+          </div>
+          <div class="sandbox-float-body" id="sandbox-float-body"></div>
+        </div>
+        <div id="dice-overlay" class="dice-overlay hidden">
+          <div class="dice-panel" id="dice-panel">
+            <div class="dice-title" id="dice-title"></div>
+            <div class="dice-rows">
+              <div class="dice-row">
+                <span class="dice-label">Attacco</span>
+                <div id="dice-att" class="dice-set"></div>
+              </div>
+              <div class="dice-row">
+                <span class="dice-label">Difesa</span>
+                <div id="dice-def" class="dice-set"></div>
+              </div>
+            </div>
+            <div class="dice-result" id="dice-result"></div>
+            <div class="dice-hint">Clic per chiudere</div>
+          </div>
+        </div>
+        <div id="choice-overlay" class="choice-overlay hidden" aria-live="polite">
+          <div class="choice-panel" id="choice-panel">
+            <div class="choice-title" id="choice-title"></div>
+            <div class="choice-subtitle" id="choice-subtitle"></div>
+            <div class="choice-options" id="choice-options"></div>
+            <div class="choice-footer" id="choice-footer"></div>
+          </div>
+        </div>
       </section>
 
       <div class="hud-stack">
         <aside class="side-rail" id="side-rail">
-          <div class="rail-drawer">
-            <div class="opponents-panel" id="opponent-panel"></div>
-            <div class="hud-block event-card" id="event-block"></div>
-            <div class="hud-block log-card">
-              <h2>Log</h2>
-              <div id="log" class="log"></div>
-            </div>
-          </div>
           <div class="hud-actions" id="actions"></div>
         </aside>
 
@@ -170,9 +202,13 @@
             <button type="button" class="hud-fold-toggle" aria-expanded="false">Obiettivo</button>
             <div class="hud-fold-body tray-mission-inner" id="player-mission"></div>
           </div>
-          <div class="tray-section tray-hand-wrap">
-            <div class="tray-label">Mano</div>
-            <div id="hand" class="hand"></div>
+          <div class="hud-fold tray-section tray-hand-wrap">
+            <button type="button" class="hud-fold-toggle" id="hand-fold-toggle" aria-expanded="false">Mano</button>
+            <div class="hud-fold-body tray-hand-body">
+              <div class="tray-label tray-hand-label">Mano</div>
+              <div id="sandbox-kit" class="sandbox-kit hidden" aria-label="Kit sandbox"></div>
+              <div id="hand" class="hand"></div>
+            </div>
           </div>
           <div class="hud-fold tray-section tray-dash">
             <button type="button" class="hud-fold-toggle" aria-expanded="false">Tu</button>
@@ -180,26 +216,24 @@
           </div>
         </section>
       </div>
-      <div class="rail-backdrop" id="rail-backdrop"></div>
-    </main>
-    </div>
 
-    <div id="dice-overlay" class="dice-overlay hidden">
-      <div class="dice-panel" id="dice-panel">
-        <div class="dice-title" id="dice-title"></div>
-        <div class="dice-rows">
-          <div class="dice-row">
-            <span class="dice-label">Attacco</span>
-            <div id="dice-att" class="dice-set"></div>
+      <!-- Fuori da hud-stack: stesso stacking di mappa/tray, niente backdrop che mangia i tap -->
+      <div class="rail-root" id="rail-root">
+        <button type="button" class="rail-backdrop" id="rail-backdrop" aria-label="Chiudi pannello"></button>
+        <aside class="rail-drawer" id="rail-drawer" aria-label="Info partita">
+          <div class="rail-drawer-head">
+            <span class="rail-drawer-title">Partita</span>
+            <button type="button" class="btn btn-ghost rail-close" id="rail-close" aria-label="Chiudi menu">✕</button>
           </div>
-          <div class="dice-row">
-            <span class="dice-label">Difesa</span>
-            <div id="dice-def" class="dice-set"></div>
+          <div class="opponents-panel" id="opponent-panel"></div>
+          <div class="hud-block event-card" id="event-block"></div>
+          <div class="hud-block log-card">
+            <h2>Log</h2>
+            <div id="log" class="log"></div>
           </div>
-        </div>
-        <div class="dice-result" id="dice-result"></div>
-        <div class="dice-hint">Clic per chiudere</div>
+        </aside>
       </div>
+    </main>
     </div>
 
     <div id="fortify-modal" class="overlay hidden">
@@ -218,13 +252,17 @@
       </div>
     </div>
 
-    </div>
-
     <div id="overlay" class="overlay hidden">
       <div class="modal">
         <h2 id="overlay-title"></h2>
         <p id="overlay-body"></p>
         <button type="button" id="btn-overlay-new" class="btn">Nuova partita</button>
+      </div>
+    </div>
+
+    <div id="card-zoom" class="card-zoom hidden" aria-hidden="true">
+      <div class="card-zoom-panel">
+        <div id="card-zoom-face" class="card card-zoom-face"></div>
       </div>
     </div>
   </div>

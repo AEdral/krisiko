@@ -2,16 +2,19 @@ import {
   createGame,
   applyAction,
   viewForPlayer,
+  isActionAllowed,
   PLAYER_SLOTS,
   MAX_PLAYERS,
   MIN_PLAYERS,
 } from '../engine/game.js';
-import { runAiTurn } from '../ai/ai.js';
+import { runAiTurn, processStackPhase } from '../ai/ai.js';
+import { log, summarizeAction, summarizeState } from './logger.js';
 
 const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const EMPTY_TTL_MS = 15 * 60 * 1000;
 const OVER_TTL_MS = 30 * 60 * 1000;
 const MAX_ROOMS = 200;
+const STACK_TICK_MS = 250;
 
 const rooms = new Map();
 
@@ -87,6 +90,7 @@ function broadcastRoom(room) {
 
 function broadcastState(room) {
   if (!room.state) return;
+  const serverTimeMs = Date.now();
   for (const ws of room.sockets) {
     const seat = room.seats.find((s) => s.clientId === ws.clientId);
     if (!seat || seat.kind !== 'human') continue;
@@ -94,7 +98,117 @@ function broadcastState(room) {
       type: 'state',
       playerId: seat.id,
       state: viewForPlayer(room.state, seat.id),
+      serverTimeMs,
     });
+  }
+}
+
+function serverNow() {
+  return Date.now();
+}
+
+function normalizeClientAction(state, playerId, action) {
+  const nowMs = serverNow();
+  const normalized = { ...action, nowMs };
+  delete normalized.playerId;
+
+  if (['CAST_START', 'CAST_CONFIRM', 'CAST_CANCEL'].includes(action.type)) {
+    normalized.playerId = playerId;
+  }
+
+  return normalized;
+}
+
+function roomHasHumanStackWait(room) {
+  const st = room.state;
+  if (!st) return false;
+
+  if (st.pendingCast) {
+    const pid = st.pendingCast.playerId;
+    const seat = room.seats.find((s) => s.id === pid);
+    return !!(seat?.kind === 'human' && seat.connected);
+  }
+
+  if (!st.responseWindow) return false;
+
+  return st.playerOrder.some((pid) => {
+    const seat = room.seats.find((s) => s.id === pid);
+    if (seat?.kind !== 'human' || !seat.connected) return false;
+    const hand = st.players[pid]?.hand || [];
+    return hand.some((_, i) => isActionAllowed(st, pid, { type: 'CAST_START', handIndex: i }));
+  });
+}
+
+/** One authoritative stack timer tick (server clock). Exported for tests. */
+export function tickRoomStack(room, nowMs = serverNow()) {
+  if (!room?.state || room.state.vanillaMode) return false;
+  const before = snapshotStack(room.state);
+  applyAction(room.state, { type: 'TICK_STACK', nowMs });
+  const after = snapshotStack(room.state);
+  return JSON.stringify(before) !== JSON.stringify(after);
+}
+
+/** AI responses + auto-close when no human is waiting. Used by server pump loop. */
+export function advanceRoomStack(room, nowMs = serverNow()) {
+  if (!room?.state || room.state.vanillaMode) return false;
+  const before = snapshotStack(room.state);
+  processStackPhase(room.state, { nowMs });
+  const after = snapshotStack(room.state);
+  return JSON.stringify(before) !== JSON.stringify(after);
+}
+
+function snapshotStack(state) {
+  return {
+    window: state.responseWindow?.deadlineMs ?? null,
+    pending: state.pendingCast?.cardId ?? null,
+    combat: !!state.combatContext,
+    stackLen: state.stack?.length ?? 0,
+  };
+}
+
+async function pumpGame(room) {
+  if (room.pumpRunning || !room.state) return;
+  room.pumpRunning = true;
+  try {
+    while (room.state && room.state.phase !== 'game_over') {
+      if (!room.state.vanillaMode && (room.state.responseWindow || room.state.pendingCast)) {
+        const waitingHuman = roomHasHumanStackWait(room);
+        advanceRoomStack(room, serverNow());
+        tickRoomStack(room, serverNow());
+        broadcastState(room);
+
+        if (room.state.responseWindow || room.state.pendingCast) {
+          await sleep(waitingHuman ? STACK_TICK_MS : 50);
+          continue;
+        }
+      }
+
+      const pid = room.state.currentPlayerId;
+      const p = room.state.players[pid];
+      if (!p || p.isHuman) break;
+
+      if (room.state.phase === 'setup') {
+        runAiTurn(room.state, { maxSteps: 5 });
+        broadcastState(room);
+        await sleep(90);
+      } else {
+        runAiTurn(room.state);
+        if (room.state.phase === 'game_over') room.status = 'done';
+        broadcastState(room);
+        await sleep(380);
+      }
+
+      if (!room.state.vanillaMode && (room.state.responseWindow || room.state.pendingCast)) {
+        continue;
+      }
+    }
+  } finally {
+    room.pumpRunning = false;
+  }
+
+  if (room.state?.phase === 'game_over') {
+    room.status = 'done';
+    broadcastState(room);
   }
 }
 
@@ -163,7 +277,7 @@ export function createRoom({
     sockets: new Set(),
     lastActive: Date.now(),
     createdAt: Date.now(),
-    aiRunning: false,
+    pumpRunning: false,
   };
   if (ws) {
     ws.clientId = hostClientId;
@@ -188,7 +302,12 @@ export function joinRoom({ roomId, clientId, name, ws }) {
     room.sockets.add(ws);
     broadcastRoom(room);
     if (room.state) {
-      send(ws, { type: 'state', playerId: existing.id, state: viewForPlayer(room.state, existing.id) });
+      send(ws, {
+        type: 'state',
+        playerId: existing.id,
+        state: viewForPlayer(room.state, existing.id),
+        serverTimeMs: serverNow(),
+      });
     }
     return { room: publicRoom(room, clientId) };
   }
@@ -245,7 +364,7 @@ export function startRoom(roomId, clientId) {
   room.lastActive = Date.now();
   broadcastRoom(room);
   broadcastState(room);
-  void pumpAi(room);
+  void pumpGame(room);
   return { ok: true };
 }
 
@@ -257,41 +376,45 @@ export function handleAction(roomId, clientId, action) {
 
   const seat = room.seats.find((s) => s.clientId === clientId);
   if (!seat || seat.kind !== 'human') return { error: 'Non sei in questa partita.' };
-  if (room.state.currentPlayerId !== seat.id) return { error: 'Non è il tuo turno.' };
   if (!action || typeof action !== 'object' || typeof action.type !== 'string') {
     return { error: 'Azione non valida.' };
   }
+  if (!isActionAllowed(room.state, seat.id, action)) {
+    log.warn('game', 'action denied', {
+      room: roomId,
+      player: seat.id,
+      action: summarizeAction(action),
+      state: summarizeState(room.state),
+    });
+    return { error: 'Azione non permessa.' };
+  }
 
-  applyAction(room.state, action);
+  const beforeLog = room.state.log?.length || 0;
+  log.info('game', `action ${action.type}`, {
+    room: roomId,
+    player: seat.id,
+    action: summarizeAction(action),
+    before: summarizeState(room.state),
+  });
+
+  applyAction(room.state, normalizeClientAction(room.state, seat.id, action));
   room.lastActive = Date.now();
   if (room.state.phase === 'game_over') room.status = 'done';
+
+  const newLogs = (room.state.log || []).slice(beforeLog);
+  for (const entry of newLogs) {
+    log.info('gamelog', entry.message, { room: roomId, type: entry.type || null });
+  }
+  log.debug('game', 'state after', { room: roomId, state: summarizeState(room.state) });
+
   broadcastState(room);
-  void pumpAi(room);
+  void pumpGame(room);
   return { ok: true };
 }
 
-async function pumpAi(room) {
-  if (room.aiRunning || !room.state) return;
-  room.aiRunning = true;
-  try {
-    while (room.state && room.state.phase !== 'game_over') {
-      const pid = room.state.currentPlayerId;
-      const p = room.state.players[pid];
-      if (!p || p.isHuman) break;
-      if (room.state.phase === 'setup') {
-        runAiTurn(room.state, { maxSteps: 5 });
-        broadcastState(room);
-        await sleep(90);
-      } else {
-        runAiTurn(room.state);
-        if (room.state.phase === 'game_over') room.status = 'done';
-        broadcastState(room);
-        await sleep(380);
-      }
-    }
-  } finally {
-    room.aiRunning = false;
-  }
+/** @internal test helper */
+export function getRoomForTest(roomId) {
+  return rooms.get(String(roomId || '').toLowerCase()) || null;
 }
 
 export function disconnect(ws) {
