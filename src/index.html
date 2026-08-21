@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="css/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Orbitron:wght@600;700;800&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
 </head>
 <body>
   <div id="app">
@@ -137,7 +137,7 @@
         </h1>
       </div>
       <div class="top-meta" id="top-meta"></div>
-      <button type="button" id="btn-rail" class="btn-rail" aria-expanded="false" aria-controls="side-rail" title="Info partita">
+      <button type="button" id="btn-rail" class="btn-rail" aria-expanded="false" aria-controls="rail-drawer" title="Info partita">
         <span class="btn-rail-bars" aria-hidden="true"></span>
         <span class="sr-only">Apri pannello</span>
       </button>
@@ -190,14 +190,6 @@
 
       <div class="hud-stack">
         <aside class="side-rail" id="side-rail">
-          <div class="rail-drawer">
-            <div class="opponents-panel" id="opponent-panel"></div>
-            <div class="hud-block event-card" id="event-block"></div>
-            <div class="hud-block log-card">
-              <h2>Log</h2>
-              <div id="log" class="log"></div>
-            </div>
-          </div>
           <div class="hud-actions" id="actions"></div>
         </aside>
 
@@ -210,10 +202,13 @@
             <button type="button" class="hud-fold-toggle" aria-expanded="false">Obiettivo</button>
             <div class="hud-fold-body tray-mission-inner" id="player-mission"></div>
           </div>
-          <div class="tray-section tray-hand-wrap">
-            <div class="tray-label">Mano</div>
-            <div id="sandbox-kit" class="sandbox-kit hidden" aria-label="Kit sandbox"></div>
-            <div id="hand" class="hand"></div>
+          <div class="hud-fold tray-section tray-hand-wrap">
+            <button type="button" class="hud-fold-toggle" id="hand-fold-toggle" aria-expanded="false">Mano</button>
+            <div class="hud-fold-body tray-hand-body">
+              <div class="tray-label tray-hand-label">Mano</div>
+              <div id="sandbox-kit" class="sandbox-kit hidden" aria-label="Kit sandbox"></div>
+              <div id="hand" class="hand"></div>
+            </div>
           </div>
           <div class="hud-fold tray-section tray-dash">
             <button type="button" class="hud-fold-toggle" aria-expanded="false">Tu</button>
@@ -221,7 +216,23 @@
           </div>
         </section>
       </div>
-      <div class="rail-backdrop" id="rail-backdrop"></div>
+
+      <!-- Fuori da hud-stack: stesso stacking di mappa/tray, niente backdrop che mangia i tap -->
+      <div class="rail-root" id="rail-root">
+        <button type="button" class="rail-backdrop" id="rail-backdrop" aria-label="Chiudi pannello"></button>
+        <aside class="rail-drawer" id="rail-drawer" aria-label="Info partita">
+          <div class="rail-drawer-head">
+            <span class="rail-drawer-title">Partita</span>
+            <button type="button" class="btn btn-ghost rail-close" id="rail-close" aria-label="Chiudi menu">✕</button>
+          </div>
+          <div class="opponents-panel" id="opponent-panel"></div>
+          <div class="hud-block event-card" id="event-block"></div>
+          <div class="hud-block log-card">
+            <h2>Log</h2>
+            <div id="log" class="log"></div>
+          </div>
+        </aside>
+      </div>
     </main>
     </div>
 
@@ -241,13 +252,17 @@
       </div>
     </div>
 
-    </div>
-
     <div id="overlay" class="overlay hidden">
       <div class="modal">
         <h2 id="overlay-title"></h2>
         <p id="overlay-body"></p>
         <button type="button" id="btn-overlay-new" class="btn">Nuova partita</button>
+      </div>
+    </div>
+
+    <div id="card-zoom" class="card-zoom hidden" aria-hidden="true">
+      <div class="card-zoom-panel">
+        <div id="card-zoom-face" class="card card-zoom-face"></div>
       </div>
     </div>
   </div>

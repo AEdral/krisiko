@@ -207,6 +207,39 @@ function bindMapCamera(svg) {
   panel?.querySelector('#map-zoom-reset')?.addEventListener('click', () => resetCam(svg));
 }
 
+const viewBoxCache = new Map();
+
+function shapeViewBox(territoryId) {
+  if (viewBoxCache.has(territoryId)) return viewBoxCache.get(territoryId);
+  const shape = TERRITORY_SHAPES[territoryId];
+  if (!shape?.d) return MAP_VIEWBOX;
+  let svg = document.getElementById('shape-measure-svg');
+  if (!svg) {
+    svg = document.createElementNS(NS, 'svg');
+    svg.id = 'shape-measure-svg';
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;left:-9999px;top:0';
+    document.body.appendChild(svg);
+  }
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', shape.d);
+  svg.appendChild(path);
+  const b = path.getBBox();
+  svg.removeChild(path);
+  const pad = Math.max(4, Math.max(b.width, b.height) * 0.14);
+  const vb = `${b.x - pad} ${b.y - pad} ${Math.max(b.width + pad * 2, 1)} ${Math.max(b.height + pad * 2, 1)}`;
+  viewBoxCache.set(territoryId, vb);
+  return vb;
+}
+
+/** Inline SVG silhouette for hand/zoom cards. */
+export function territorySilhouetteHtml(territoryId) {
+  const shape = TERRITORY_SHAPES[territoryId];
+  if (!shape?.d) return '';
+  const vb = shapeViewBox(territoryId);
+  return `<div class="card-silhouette" aria-hidden="true"><svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet"><path d="${shape.d}"/></svg></div>`;
+}
+
 export function renderMap(svg, state, ui, onSelect) {
   bindMapCamera(svg);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
@@ -217,7 +250,8 @@ export function renderMap(svg, state, ui, onSelect) {
 
   drawSeaRoutes(world);
 
-  const highlights = ui.highlightIds;
+  const riderId = ui.hoverRiderTerritoryId || null;
+  const highlights = riderId ? [riderId] : ui.highlightIds;
 
   for (const id of Object.keys(TERRITORY_SHAPES)) {
     const shape = TERRITORY_SHAPES[id];
@@ -229,7 +263,10 @@ export function renderMap(svg, state, ui, onSelect) {
     g.classList.add('territory');
     g.dataset.id = id;
     if (ui.selectedId === id) g.classList.add('selected');
-    if (highlights?.length) {
+    if (riderId) {
+      if (id === riderId) g.classList.add('rider-focus', 'highlight');
+      else g.classList.add('rider-dim');
+    } else if (highlights?.length) {
       if (highlights.includes(id)) g.classList.add('highlight');
       else if (ui.selectedId !== id) g.classList.add('dim');
     }

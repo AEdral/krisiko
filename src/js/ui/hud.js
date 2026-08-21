@@ -19,6 +19,7 @@ import {
   getActiveEvents,
 } from '../engine/game.js';
 import { isValidClassicSet, CLASSIC_HAND_LIMIT } from '../data/classic-cards.js';
+import { territorySilhouetteHtml } from './map.js';
 
 function countOwned(state, pid) {
   return Object.values(state.territories).filter((t) => t.owner === pid).length;
@@ -113,26 +114,22 @@ function opponentsHtml(state, ui) {
         .filter(Boolean);
       const open = ui.expandedOpponentId === id;
       const dead = !alive.has(id);
-      const relicNames = state.vanillaMode
-        ? 'Modalità classico'
-        : [`Reliquia: ${relic?.name || '—'}`, ...extras.map((r) => r.name)].join(' · ');
+      const relicShort = state.vanillaMode ? 'Classico' : relic?.name || '—';
       return `<article class="opp-card${open ? ' is-open' : ''}${dead ? ' is-out' : ''}" data-opp-id="${id}" style="--opp:${ai.color}">
         <div class="opp-summary">
           <div class="who">
             <strong style="color:${ai.color}">${escapeHtml(ai.name)}${dead ? ' · fuori' : ''}</strong>
-            <span class="pill" style="box-shadow:inset 0 0 0 1px ${ai.color}">${countOwned(state, id)} / 42</span>
+            <span class="opp-relic-one" title="Reliquia">${escapeHtml(relicShort)}</span>
+            <span class="pill opp-terr-pill" style="box-shadow:inset 0 0 0 1px ${ai.color}">${countOwned(state, id)}/42</span>
           </div>
-          <div class="stat-row">
-            <div class="stat-chip"><span class="k">Armate</span><span class="v">${countArmies(state, id)}</span></div>
-            <div class="stat-chip"><span class="k">Bonus</span><span class="v">+${getContinentBonus(state, id)}</span></div>
-          </div>
-          <div class="relic-mini">
-            <div class="name">${escapeHtml(relicNames)}</div>
-          </div>
-          <div class="opp-expand-hint">Clic per dettagli ▾</div>
         </div>
         <div class="opp-details">
           <div class="opp-details-inner">
+            <div class="stat-row">
+              <div class="stat-chip"><span class="k">Armate</span><span class="v">${countArmies(state, id)}</span></div>
+              <div class="stat-chip"><span class="k">Bonus</span><span class="v">+${getContinentBonus(state, id)}</span></div>
+              <div class="stat-chip"><span class="k">Carte</span><span class="v">${ai.hand.length}</span></div>
+            </div>
             ${
               state.vanillaMode
                 ? `<div class="relic-mini"><div class="desc">Carte territorio tradizionali, niente reliquie Krisiko.</div></div>`
@@ -271,6 +268,12 @@ export function renderHud(els, state, ui, nowMs = Date.now()) {
 
   renderHand(els.hand, state, human, ui);
   renderSandboxKit(els.sandboxKit, state, human, ui);
+  const handToggle = document.getElementById('hand-fold-toggle');
+  if (handToggle) {
+    const n = human.hand?.length || 0;
+    const kitN = state.sandboxMode ? human.sandboxKit?.length || 0 : 0;
+    handToggle.textContent = kitN ? `Mano (${n}) · kit ${kitN}` : `Mano (${n})`;
+  }
   renderChoiceOverlay(els, state, human, ui);
   renderLog(els.log, state);
   renderStackPanel(els.stackPanel, state, ui, nowMs);
@@ -444,7 +447,7 @@ export function renderChoiceOverlay(els, state, human, ui) {
 
   if (!key) {
     root.classList.add('hidden');
-    root.classList.remove('is-die-wait');
+    root.classList.remove('is-die-wait', 'is-dock');
     titleEl.textContent = '';
     if (subEl) subEl.textContent = '';
     optsEl.innerHTML = '';
@@ -456,6 +459,11 @@ export function renderChoiceOverlay(els, state, human, ui) {
 
   ensureChoicePick(ui, key);
   root.classList.remove('hidden');
+
+  const setDock = (dock, dieWait = false) => {
+    root.classList.toggle('is-dock', !!dock);
+    root.classList.toggle('is-die-wait', !!dieWait);
+  };
 
   optsEl.innerHTML = '';
   footEl.innerHTML = '';
@@ -489,7 +497,7 @@ export function renderChoiceOverlay(els, state, human, ui) {
     const pc = state.pendingCast;
     const card = getCard(pc.cardId);
     const needDie = pc.needsDiePick && pc.targets?.dieIndex == null;
-    root.classList.toggle('is-die-wait', needDie);
+    setDock(true, needDie);
     titleEl.textContent = 'Conferma lancio';
     if (subEl) {
       subEl.textContent = needDie
@@ -524,6 +532,7 @@ export function renderChoiceOverlay(els, state, human, ui) {
 
   // —— Bastione ——
   if (state.pendingBastion && me.id === state.pendingBastion.defenderId) {
+    setDock(true);
     titleEl.textContent = 'Bastione';
     if (subEl) subEl.textContent = 'Sei sotto attacco. Usare Bastione (+1 al dado di difesa più alto)?';
     addOpt({
@@ -544,6 +553,7 @@ export function renderChoiceOverlay(els, state, human, ui) {
     String(ui.mode).startsWith('card_') &&
     !(state.pendingChoice && me.id === state.pendingChoice.actorId)
   ) {
+    setDock(true);
     const labels = {
       card_recruit: ['Reclutamento', 'Clicca un tuo territorio per +2 armate.'],
       card_supplies: ['Approvvigionamenti', 'Clicca un tuo territorio per +4 armate.'],
@@ -575,6 +585,7 @@ export function renderChoiceOverlay(els, state, human, ui) {
     ui?.selectedId &&
     !(state.pendingChoice && me.id === state.pendingChoice.actorId)
   ) {
+    setDock(true);
     const tid = ui.selectedId;
     const name = TERRITORIES[tid]?.name || tid;
     titleEl.textContent = 'Spostamento';
@@ -595,6 +606,7 @@ export function renderChoiceOverlay(els, state, human, ui) {
     !(state.pendingChoice && me.id === state.pendingChoice.actorId) &&
     !(state.responseWindow.passedPlayerIds || []).includes(me.id)
   ) {
+    setDock(true);
     const kind = state.responseWindow.kind;
     const playable = collectPlayableResponseCards(state, me);
     const rem = Math.ceil(windowRemainingMs(state, Date.now()) / 1000);
@@ -630,10 +642,12 @@ export function renderChoiceOverlay(els, state, human, ui) {
     return;
   }
 
-  // —— pendingChoice ——
+  // —— pendingChoice (modal centrale) ——
+  setDock(false);
   const pc = state.pendingChoice;
   if (!pc || me.id !== pc.actorId) {
     root.classList.add('hidden');
+    root.classList.remove('is-dock', 'is-die-wait');
     return;
   }
 
@@ -835,6 +849,145 @@ function renderSandboxPanel(els, state, human, ui) {
   });
 }
 
+function rarityLabel(rarity) {
+  switch (rarity) {
+    case 'common':
+      return 'Comune';
+    case 'rare':
+      return 'Rara';
+    case 'epic':
+      return 'Epica';
+    case 'jolly':
+      return 'Jolly';
+    default:
+      return rarity || '';
+  }
+}
+
+function timingLabel(timing) {
+  switch (timing) {
+    case 'action':
+      return 'Azione';
+    case 'combat':
+      return 'Combat';
+    case 'instant':
+      return 'Instant';
+    default:
+      return timing || '';
+  }
+}
+
+function krisikoCardInnerHtml(card) {
+  const rarity = card.rarity || 'common';
+  const sil = card.territoryId ? territorySilhouetteHtml(card.territoryId) : '';
+  return `
+    ${sil}
+    <div class="card-inner">
+      <div class="crarity">${escapeHtml(rarityLabel(rarity))}</div>
+      <div class="ctiming">${escapeHtml(timingLabel(card.timing || card.type))}</div>
+      <div class="cname">${escapeHtml(card.name)}</div>
+      ${card.territoryName ? `<div class="cterr">${escapeHtml(card.territoryName)}</div>` : ''}
+      <div class="cdesc">${escapeHtml(card.description || '')}</div>
+    </div>
+  `;
+}
+
+function classicCardInnerHtml(card) {
+  const tid = card.id;
+  const sil = tid ? territorySilhouetteHtml(tid) : '';
+  return `
+    ${sil}
+    <div class="card-inner">
+      <div class="ctype classic-symbol">${card.emoji}</div>
+      <div class="cname">${escapeHtml(card.symbolName)}</div>
+      <div class="cdesc">${escapeHtml(card.name)}</div>
+    </div>
+  `;
+}
+
+let cardZoomHideTimer = null;
+
+function getCardZoomEls() {
+  return {
+    root: document.getElementById('card-zoom'),
+    face: document.getElementById('card-zoom-face'),
+  };
+}
+
+function hideCardZoom() {
+  const { root } = getCardZoomEls();
+  if (!root) return;
+  root.classList.remove('is-visible');
+  root.classList.add('hidden');
+  root.setAttribute('aria-hidden', 'true');
+}
+
+/** Chiude zoom carta + highlight rider sulla mappa. */
+export function clearCardHover(ui) {
+  if (cardZoomHideTimer) {
+    clearTimeout(cardZoomHideTimer);
+    cardZoomHideTimer = null;
+  }
+  hideCardZoom();
+  if (ui?.hoverRiderTerritoryId) ui.onHoverRider?.(null);
+  else ui?.onHoverRider?.(null);
+}
+
+function showCardZoom(anchorEl, html, className) {
+  const { root, face } = getCardZoomEls();
+  if (!root || !face || !anchorEl) return;
+  if (cardZoomHideTimer) {
+    clearTimeout(cardZoomHideTimer);
+    cardZoomHideTimer = null;
+  }
+  face.className = `card card-zoom-face ${className || ''}`.trim();
+  face.innerHTML = html;
+  root.classList.remove('hidden');
+  root.setAttribute('aria-hidden', 'false');
+
+  const pad = 12;
+  const rect = anchorEl.getBoundingClientRect();
+  root.style.left = '0px';
+  root.style.top = '0px';
+  const zw = root.offsetWidth || 240;
+  const zh = root.offsetHeight || 320;
+  let left = rect.left + rect.width / 2 - zw / 2;
+  let top = rect.top - zh - 14;
+  if (top < pad) top = rect.bottom + 12;
+  left = Math.max(pad, Math.min(left, window.innerWidth - zw - pad));
+  top = Math.max(pad, Math.min(top, window.innerHeight - zh - pad));
+  root.style.left = `${left}px`;
+  root.style.top = `${top}px`;
+  requestAnimationFrame(() => root.classList.add('is-visible'));
+}
+
+function bindCardZoom(btn, html, className, riderTerritoryId, ui) {
+  btn.addEventListener('pointerenter', (e) => {
+    if (e.pointerType === 'touch') return;
+    showCardZoom(btn, html, className);
+    ui?.onHoverRider?.(riderTerritoryId || null);
+  });
+  btn.addEventListener('pointerleave', () => {
+    cardZoomHideTimer = setTimeout(() => {
+      hideCardZoom();
+      ui?.onHoverRider?.(null);
+    }, 80);
+  });
+  btn.addEventListener('pointerdown', () => {
+    clearCardHover(ui);
+  });
+  btn.addEventListener('focus', () => {
+    showCardZoom(btn, html, className);
+    ui?.onHoverRider?.(riderTerritoryId || null);
+  });
+  btn.addEventListener('blur', () => {
+    cardZoomHideTimer = setTimeout(() => {
+      hideCardZoom();
+      ui?.onHoverRider?.(null);
+    }, 80);
+  });
+}
+
 function renderSandboxKit(el, state, human, ui) {
   if (!el) return;
   const kit = human.sandboxKit || [];
@@ -856,16 +1009,18 @@ function renderSandboxKit(el, state, human, ui) {
     if (!card) return;
     const selected = ui.selectedKitIndex === index;
     const playable = canStartCast(state, human.id, card);
+    const rarity = card.rarity || 'common';
+    const cls =
+      `card rarity-${rarity}` +
+      (selected ? ' selected' : '') +
+      (playable ? ' playable' : '');
+    const html = krisikoCardInnerHtml(card);
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'card' + (selected ? ' selected' : '') + (playable ? ' playable' : '');
-    btn.innerHTML = `
-      <div class="ctype">${escapeHtml(card.timing || '')}${card.rarity ? ` · ${card.rarity}` : ''}</div>
-      <div class="cname">${escapeHtml(card.name)}</div>
-      ${card.territoryName ? `<div class="cterr">${escapeHtml(card.territoryName)}</div>` : ''}
-      <div class="cdesc">${escapeHtml(card.description)}</div>
-    `;
+    btn.className = cls;
+    btn.innerHTML = html;
     btn.addEventListener('click', () => ui.onKitCardClick?.(index, card));
+    bindCardZoom(btn, html, `rarity-${rarity}`, card.territoryId || null, ui);
     row.appendChild(btn);
   });
   el.appendChild(row);
@@ -895,29 +1050,21 @@ function renderHand(el, state, human, ui) {
       ? (ui.classicCardSelection || []).includes(index)
       : ui.selectedCardIndex === index;
     const playable = !classic && canStartCast(state, human.id, card);
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className =
+    const rarity = classic ? null : card.rarity || 'common';
+    const cls =
       'card' +
-      (classic ? ' classic' : '') +
+      (classic ? ' classic' : ` rarity-${rarity}`) +
       (selected ? ' selected' : '') +
       (playable ? ' playable' : '') +
       (!classic && !playable && !state.vanillaMode ? ' dimmed' : '');
-    if (classic) {
-      btn.innerHTML = `
-        <div class="ctype classic-symbol">${card.emoji}</div>
-        <div class="cname">${escapeHtml(card.symbolName)}</div>
-        <div class="cdesc">${escapeHtml(card.name)}</div>
-      `;
-    } else {
-      btn.innerHTML = `
-        <div class="ctype">${escapeHtml(card.timing || card.type || '')}${card.rarity ? ` · ${card.rarity}` : ''}</div>
-        <div class="cname">${escapeHtml(card.name)}</div>
-        ${card.territoryName ? `<div class="cterr">${escapeHtml(card.territoryName)}</div>` : ''}
-        <div class="cdesc">${escapeHtml(card.description)}</div>
-      `;
-    }
+    const html = classic ? classicCardInnerHtml(card) : krisikoCardInnerHtml(card);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = cls;
+    btn.innerHTML = html;
     btn.addEventListener('click', () => ui.onCardClick?.(index, card));
+    const riderId = classic ? card.id : card.territoryId || null;
+    bindCardZoom(btn, html, classic ? 'classic' : `rarity-${rarity}`, riderId, ui);
     el.appendChild(btn);
   });
 }

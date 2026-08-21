@@ -3,7 +3,7 @@ import { isValidClassicSet } from './data/classic-cards.js';
 import { runAiTurn, processStackPhase } from './ai/ai.js';
 import { processChoiceDraft } from './engine/game.js';
 import { renderMap, computeHighlights } from './ui/map.js';
-import { renderHud, renderActions } from './ui/hud.js';
+import { renderHud, renderActions, clearCardHover } from './ui/hud.js';
 import { showBattleDice, syncLiveCombatDice } from './ui/dice.js';
 import { createNet, describeNetError, loadHostedRoom, saveHostedRoom, clearHostedRoom } from './net/client.js';
 
@@ -99,6 +99,7 @@ let moveModalMode = null; // 'fortify' | 'invasion'
 let lastShownBattleKey = null;
 
 const ui = {
+  hoverRiderTerritoryId: null,
   selectedId: null,
   selectedCardIndex: null,
   selectedKitIndex: null,
@@ -601,6 +602,12 @@ function startLocalGame() {
   els.fortifyModal.classList.add('hidden');
   els.diceOverlay.classList.add('hidden');
   els.app?.classList.toggle('sandbox-mode', !!sandboxMode);
+  if (sandboxMode) {
+    const saved = Number(localStorage.getItem(TRAY_H_KEY));
+    if (!(Number.isFinite(saved) && saved >= TRAY_H_MIN)) {
+      applyTrayHeight(TRAY_H_SANDBOX_DEFAULT);
+    }
+  }
   refresh();
   maybeRunAi();
 }
@@ -879,6 +886,19 @@ els.fortifyConfirm.addEventListener('click', () => {
 });
 
 
+function refreshMapOnly() {
+  if (!state) return;
+  ui.highlightIds = computeHighlights(state, ui);
+  renderMap(els.map, state, ui, onTerritoryClick);
+}
+
+ui.onHoverRider = (territoryId) => {
+  const next = territoryId || null;
+  if (ui.hoverRiderTerritoryId === next) return;
+  ui.hoverRiderTerritoryId = next;
+  refreshMapOnly();
+};
+
 function refresh() {
   if (!state) {
     els.mapHint.textContent = 'Nuova partita dalla home.';
@@ -1064,38 +1084,41 @@ function onTerritoryClick(id) {
 
   if (ui.mode === 'card_recruit' || ui.mode === 'card_supplies') {
     if (state.territories[id].owner !== pid) return;
-    playActionCard({
+    const payload = {
       handIndex: ui.selectedCardIndex,
       kitIndex: ui.selectedKitIndex,
       fromKit: ui.selectedKitIndex != null,
       territoryId: id,
       riderTerritoryId: id,
-    }, { ai: true });
+    };
     clearCardSelection();
+    playActionCard(payload, { ai: true });
     return;
   }
 
   if (ui.mode === 'card_isolation') {
-    playActionCard({
+    const payload = {
       handIndex: ui.selectedCardIndex,
       kitIndex: ui.selectedKitIndex,
       fromKit: ui.selectedKitIndex != null,
       territoryId: id,
-    }, { ai: true });
+    };
     clearCardSelection();
+    playActionCard(payload, { ai: true });
     return;
   }
 
   if (ui.mode === 'card_betrayal') {
     const t = state.territories[id];
     if (!t || t.owner === pid || t.armies !== 1) return;
-    playActionCard({
+    const payload = {
       handIndex: ui.selectedCardIndex,
       kitIndex: ui.selectedKitIndex,
       fromKit: ui.selectedKitIndex != null,
       territoryId: id,
-    }, { ai: true });
+    };
     clearCardSelection();
+    playActionCard(payload, { ai: true });
     return;
   }
 
@@ -1108,15 +1131,16 @@ function onTerritoryClick(id) {
     }
     const from = ui.marchFrom;
     const max = state.territories[from].armies - 1;
-    playActionCard({
+    const payload = {
       handIndex: ui.selectedCardIndex,
       kitIndex: ui.selectedKitIndex,
       fromKit: ui.selectedKitIndex != null,
       from,
       to: id,
       armies: max,
-    }, { ai: true });
+    };
     clearCardSelection();
+    playActionCard(payload, { ai: true });
     return;
   }
 
@@ -1128,16 +1152,18 @@ function onTerritoryClick(id) {
       return;
     }
     const from = ui.marchFrom;
+    if (state.territories[id].owner !== pid || !areAdjacent(from, id)) return;
     const max = Math.min(3, state.territories[from].armies - 1);
-    playActionCard({
+    const payload = {
       handIndex: ui.selectedCardIndex,
       kitIndex: ui.selectedKitIndex,
       fromKit: ui.selectedKitIndex != null,
       from,
       to: id,
       armies: max,
-    }, { ai: true });
+    };
     clearCardSelection();
+    playActionCard(payload, { ai: true });
     return;
   }
 
@@ -1219,6 +1245,7 @@ function onTerritoryClick(id) {
 
 ui.onCardClick = (index, card) => {
   if (!state || state.phase === 'game_over') return;
+  clearCardHover(ui);
 
   if (state.vanillaMode && card.type === 'classic') {
     if (!isMyTurn() || state.phase !== 'reinforce') return;
@@ -1366,6 +1393,7 @@ function playKitOrHandCard(opts, card) {
 
 ui.onKitCardClick = (index, card) => {
   if (!state || !state.sandboxMode || state.phase === 'game_over') return;
+  clearCardHover(ui);
   const me = localId();
 
   if (state.responseWindow || state.pendingCast) {
@@ -1445,6 +1473,7 @@ ui.onCancelTargeting = () => {
   ui.selectedKitIndex = null;
   ui.marchFrom = null;
   ui.selectedId = null;
+  ui.hoverRiderTerritoryId = null;
   if (moveModalMode === 'fortify') {
     pendingFortify = null;
     moveModalMode = null;
@@ -1694,10 +1723,25 @@ function setRailOpen(open) {
   btnRail?.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
-btnRail?.addEventListener('click', () => {
+btnRail?.addEventListener('click', (ev) => {
+  ev.stopPropagation();
   setRailOpen(!appEl.classList.contains('rail-open'));
 });
-railBackdrop?.addEventListener('click', () => setRailOpen(false));
+
+const railClose = document.getElementById('rail-close');
+const railDrawer = document.getElementById('rail-drawer');
+
+railClose?.addEventListener('click', (ev) => {
+  ev.preventDefault();
+  ev.stopPropagation();
+  setRailOpen(false);
+});
+
+railBackdrop?.addEventListener('click', (ev) => {
+  ev.preventDefault();
+  setRailOpen(false);
+});
+
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') {
     setRailOpen(false);
@@ -1712,10 +1756,15 @@ els.playerMission.addEventListener('click', () => {
 els.opponentPanel.addEventListener('click', (ev) => {
   const row = ev.target.closest('[data-opp-id]');
   if (!row) return;
+  ev.stopPropagation();
   const id = row.dataset.oppId;
   ui.expandedOpponentId = ui.expandedOpponentId === id ? null : id;
-  refresh();
+  els.opponentPanel.querySelectorAll('.opp-card[data-opp-id]').forEach((el) => {
+    el.classList.toggle('is-open', el.dataset.oppId === ui.expandedOpponentId);
+  });
 });
+
+railDrawer?.addEventListener('click', (ev) => ev.stopPropagation());
 
 document.querySelector('.hud-stack')?.addEventListener('click', (ev) => {
   const btn = ev.target.closest('.hud-fold-toggle');
@@ -1789,6 +1838,79 @@ els.sandboxFloatToggle?.addEventListener('click', (ev) => {
     ev.preventDefault();
   });
 })();
+
+const TRAY_H_KEY = 'krisiko.trayH';
+const TRAY_H_DEFAULT = 176;
+const TRAY_H_SANDBOX_DEFAULT = 248;
+const TRAY_H_MIN = 156;
+
+function trayHeightMax() {
+  return Math.floor(window.innerHeight * 0.55);
+}
+
+function applyTrayHeight(px) {
+  const h = Math.max(TRAY_H_MIN, Math.min(trayHeightMax(), Math.round(px)));
+  document.documentElement.style.setProperty('--tray-h', `${h}px`);
+  if (els.app) els.app.style.setProperty('--tray-h', `${h}px`);
+  return h;
+}
+
+function initTrayResize() {
+  const tray = els.playerTray;
+  if (!tray || tray.querySelector('.tray-resize-handle')) return;
+
+  const handle = document.createElement('div');
+  handle.className = 'tray-resize-handle';
+  handle.title = 'Trascina per ridimensionare la barra';
+  handle.setAttribute('role', 'separator');
+  handle.setAttribute('aria-orientation', 'horizontal');
+  tray.prepend(handle);
+
+  const saved = Number(localStorage.getItem(TRAY_H_KEY));
+  const sandbox = els.app?.classList.contains('sandbox-mode');
+  const initial =
+    Number.isFinite(saved) && saved >= TRAY_H_MIN
+      ? saved
+      : sandbox
+        ? TRAY_H_SANDBOX_DEFAULT
+        : TRAY_H_DEFAULT;
+  applyTrayHeight(initial);
+
+  let dragging = false;
+  let startY = 0;
+  let startH = 0;
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button !== 0) return;
+    dragging = true;
+    startY = e.clientY;
+    startH = tray.getBoundingClientRect().height;
+    handle.setPointerCapture(e.pointerId);
+    document.body.classList.add('is-tray-resizing');
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    applyTrayHeight(startH + (startY - e.clientY));
+  });
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('is-tray-resizing');
+    const h = Math.round(tray.getBoundingClientRect().height);
+    localStorage.setItem(TRAY_H_KEY, String(h));
+  };
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+}
+
+// Re-apply default when entering sandbox without a saved taller size is optional;
+// always re-read saved on init.
+initTrayResize();
+window.addEventListener('resize', () => {
+  const cur = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tray-h'));
+  if (Number.isFinite(cur)) applyTrayHeight(cur);
+});
 
 const roomParam = new URLSearchParams(location.search).get('room');
 if (roomParam) {
