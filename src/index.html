@@ -76,6 +76,13 @@
             </span>
             <button type="button" id="setup-vanilla" class="setup-switch" aria-pressed="false">Off</button>
           </label>
+          <label class="setup-switch-row">
+            <span>
+              <strong>Sandbox</strong>
+              <span class="setup-switch-desc">Solo locale: armate già schierate, kit di tutte le carte, toggle reliquie/eventi.</span>
+            </span>
+            <button type="button" id="setup-sandbox" class="setup-switch" aria-pressed="false">Off</button>
+          </label>
         </div>
         <p class="lobby-error hidden" id="setup-error"></p>
         <div class="flow-actions">
@@ -147,6 +154,13 @@
           <button type="button" id="map-zoom-reset" class="btn btn-ghost" aria-label="Tutta la mappa" title="Tutta la mappa">1×</button>
         </div>
         <div class="map-hint" id="map-hint">Seleziona un territorio</div>
+        <div id="sandbox-float" class="sandbox-float hidden" aria-label="Pannello sandbox">
+          <div class="sandbox-float-header" id="sandbox-float-header">
+            <button type="button" class="sandbox-float-toggle" id="sandbox-float-toggle" aria-expanded="false">Sandbox</button>
+            <div class="sandbox-float-summary" id="sandbox-float-summary"></div>
+          </div>
+          <div class="sandbox-float-body" id="sandbox-float-body"></div>
+        </div>
         <div id="dice-overlay" class="dice-overlay hidden">
           <div class="dice-panel" id="dice-panel">
             <div class="dice-title" id="dice-title"></div>
@@ -162,6 +176,14 @@
             </div>
             <div class="dice-result" id="dice-result"></div>
             <div class="dice-hint">Clic per chiudere</div>
+          </div>
+        </div>
+        <div id="choice-overlay" class="choice-overlay hidden" aria-live="polite">
+          <div class="choice-panel" id="choice-panel">
+            <div class="choice-title" id="choice-title"></div>
+            <div class="choice-subtitle" id="choice-subtitle"></div>
+            <div class="choice-options" id="choice-options"></div>
+            <div class="choice-footer" id="choice-footer"></div>
           </div>
         </div>
       </section>
@@ -190,7 +212,7 @@
           </div>
           <div class="tray-section tray-hand-wrap">
             <div class="tray-label">Mano</div>
-            <div id="hand-cast-bar" class="hand-cast-bar hidden" aria-label="Conferma lancio"></div>
+            <div id="sandbox-kit" class="sandbox-kit hidden" aria-label="Kit sandbox"></div>
             <div id="hand" class="hand"></div>
           </div>
           <div class="hud-fold tray-section tray-dash">

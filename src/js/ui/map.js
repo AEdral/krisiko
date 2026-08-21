@@ -291,7 +291,7 @@ export function computeHighlights(state, ui) {
     return Object.keys(state.territories).filter((n) => {
       if (n === sel) return false;
       if (state.territories[n].owner !== pid) return false;
-      return areAdjacent(sel, n) || state.activeEventId === 'supply_lines';
+      return areAdjacent(sel, n) || (state.activeEventIds || []).includes('supply_lines') || state.activeEventId === 'supply_lines';
     });
   }
 

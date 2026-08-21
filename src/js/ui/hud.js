@@ -1,6 +1,8 @@
 import {
   RELICS,
   EVENTS,
+  EVENT_IDS,
+  RELIC_IDS,
   CARDS,
   getCard,
   MISSIONS,
@@ -14,6 +16,7 @@ import {
   windowRemainingMs,
   canStartCast,
   TERRITORIES,
+  getActiveEvents,
 } from '../engine/game.js';
 import { isValidClassicSet, CLASSIC_HAND_LIMIT } from '../data/classic-cards.js';
 
@@ -105,8 +108,14 @@ function opponentsHtml(state, ui) {
     .map((id) => {
       const ai = state.players[id];
       const relic = RELICS[ai.relicId];
+      const extras = (ai.extraRelicIds || [])
+        .map((rid) => RELICS[rid])
+        .filter(Boolean);
       const open = ui.expandedOpponentId === id;
       const dead = !alive.has(id);
+      const relicNames = state.vanillaMode
+        ? 'Modalità classico'
+        : [`Reliquia: ${relic?.name || '—'}`, ...extras.map((r) => r.name)].join(' · ');
       return `<article class="opp-card${open ? ' is-open' : ''}${dead ? ' is-out' : ''}" data-opp-id="${id}" style="--opp:${ai.color}">
         <div class="opp-summary">
           <div class="who">
@@ -118,7 +127,7 @@ function opponentsHtml(state, ui) {
             <div class="stat-chip"><span class="k">Bonus</span><span class="v">+${getContinentBonus(state, id)}</span></div>
           </div>
           <div class="relic-mini">
-            <div class="name">${state.vanillaMode ? 'Modalità classico' : `Reliquia: ${escapeHtml(relic?.name || '—')}`}</div>
+            <div class="name">${escapeHtml(relicNames)}</div>
           </div>
           <div class="opp-expand-hint">Clic per dettagli ▾</div>
         </div>
@@ -128,8 +137,17 @@ function opponentsHtml(state, ui) {
               state.vanillaMode
                 ? `<div class="relic-mini"><div class="desc">Carte territorio tradizionali, niente reliquie Krisiko.</div></div>`
                 : `<div class="relic-mini">
+              <div class="name">${escapeHtml(relic?.name || '—')}</div>
               <div class="desc">${escapeHtml(relic?.description || '')}</div>
-            </div>`
+            </div>
+            ${extras
+              .map(
+                (extra) => `<div class="relic-mini">
+              <div class="name">${escapeHtml(extra.name)}</div>
+              <div class="desc">${escapeHtml(extra.description || '')}</div>
+            </div>`,
+              )
+              .join('')}`
             }
             <div class="relic-mini">
               <div class="name">Obiettivo: segreto</div>
@@ -173,18 +191,24 @@ export function renderHud(els, state, ui, nowMs = Date.now()) {
   els.opponentPanel.classList.toggle('is-open', !!ui.expandedOpponentId);
   els.opponentPanel.title = '';
 
-  const ev = state.activeEventId ? EVENTS[state.activeEventId] : null;
+  const evList = getActiveEvents(state);
   els.eventBlock.innerHTML = `
-    <h2>Evento globale</h2>
+    <h2>${evList.length > 1 ? 'Eventi globali' : 'Evento globale'}</h2>
     ${
       state.vanillaMode
         ? `<p class="line" style="color:var(--muted)">Non disponibile in modalità classico</p>`
-        : ev
-        ? `<p class="line"><strong>${escapeHtml(ev.name)}</strong></p>
-           <p class="line" style="color:var(--muted);font-size:0.75rem">${escapeHtml(ev.description)}</p>`
+        : evList.length
+        ? evList
+            .map(
+              (ev) => `<p class="line"><strong>${escapeHtml(ev.name)}</strong></p>
+           <p class="line" style="color:var(--muted);font-size:0.75rem">${escapeHtml(ev.description)}</p>`,
+            )
+            .join('')
         : `<p class="line" style="color:var(--muted)">Nessuno (dal round 2)</p>`
     }
   `;
+
+  renderSandboxPanel(els, state, human, ui);
 
   els.playerRelic.innerHTML = `
     <div class="tray-label">Reliquia</div>
@@ -246,7 +270,8 @@ export function renderHud(els, state, ui, nowMs = Date.now()) {
   `;
 
   renderHand(els.hand, state, human, ui);
-  renderHandCastBar(els.handCastBar, state, human, ui);
+  renderSandboxKit(els.sandboxKit, state, human, ui);
+  renderChoiceOverlay(els, state, human, ui);
   renderLog(els.log, state);
   renderStackPanel(els.stackPanel, state, ui, nowMs);
 }
@@ -272,9 +297,11 @@ export function renderStackPanel(el, state, ui, nowMs = Date.now()) {
   const windowLabel =
     state.responseWindow?.kind === 'combat'
       ? 'Combattimento'
-      : state.responseWindow?.kind === 'action_response'
-        ? 'Risposta'
-        : 'In attesa';
+      : state.responseWindow?.kind === 'combat_counter'
+        ? 'Counter combat'
+        : state.responseWindow?.kind === 'action_response'
+          ? 'Risposta'
+          : 'In attesa';
 
   let banner = '';
   if (state.pendingCast) {
@@ -326,56 +353,522 @@ export function renderStackPanel(el, state, ui, nowMs = Date.now()) {
 
   const combatStackHint =
     state.responseWindow?.kind === 'combat'
-      ? `<div class="stack-combat-hint stack-combat-active">Carte Combat/Instant verdi in mano · dadi al centro</div>`
-      : '';
-
-  const passBtn =
-    state.responseWindow &&
-    !state.pendingCast &&
-    me &&
-    !(state.responseWindow.passedPlayerIds || []).includes(me.id)
-      ? `<button type="button" class="btn btn-ghost stack-pass-btn" data-pass-stack>OK per me</button>`
-      : '';
+      ? `<div class="stack-combat-hint stack-combat-active">Solo chi perde truppe: combat dal pannello centrale</div>`
+      : state.responseWindow?.kind === 'combat_counter'
+        ? `<div class="stack-combat-hint stack-combat-active">Rispondi dal pannello centrale</div>`
+        : '';
 
   el.innerHTML = `
     <h2>Stack</h2>
     ${
       state.responseWindow
-        ? `<div class="stack-timer${paused ? ' is-paused' : ''}">${paused ? '⏸' : '⏱'} ${sec}s</div>`
+        ? `<div class="stack-timer${paused ? ' is-paused' : ''}">${paused ? '⏸' : '⏱'} ${sec}s · ${escapeHtml(windowLabel)}</div>`
         : `<div class="stack-timer">—</div>`
     }
     ${banner}
     <div class="stack-entries">${entries}</div>
     ${combatStackHint}
-    ${passBtn}
   `;
-
-  el.querySelector('[data-pass-stack]')?.addEventListener('click', () => ui.onPassStack?.());
 }
 
-function renderHandCastBar(el, state, human, ui) {
+function choiceSessionKey(state, me, ui) {
+  if (!me) return null;
+  if (state.pendingChoice && me.id === state.pendingChoice.actorId) {
+    const pc = state.pendingChoice;
+    return `pc:${pc.kind}:${pc.step || ''}:${pc.prompt || ''}`;
+  }
+  if (state.pendingBastion && me.id === state.pendingBastion.defenderId) {
+    return `bastion:${state.pendingBastion.defenderId}`;
+  }
+  if (state.pendingCast && me.id === state.pendingCast.playerId && !state.pendingCast.hidden) {
+    return `cast:${state.pendingCast.cardId}:${state.pendingCast.targets?.dieIndex ?? 'x'}`;
+  }
+  if (me.id === state.currentPlayerId && ui?.mode && String(ui.mode).startsWith('card_')) {
+    return `target:${ui.mode}:${ui.selectedCardIndex ?? ''}:${ui.selectedKitIndex ?? ''}:${ui.marchFrom || ''}`;
+  }
+  if (me.id === state.currentPlayerId && state.phase === 'fortify' && ui?.selectedId) {
+    return `fortify_sel:${ui.selectedId}`;
+  }
+  if (
+    !state.vanillaMode &&
+    state.responseWindow &&
+    !state.pendingCast &&
+    !(state.responseWindow.passedPlayerIds || []).includes(me.id)
+  ) {
+    const top = state.stack?.[state.stack.length - 1];
+    return `rw:${state.responseWindow.kind}:${top?.cardId || ''}:${top?.id || ''}:${state.combatContext?.attLossPreview ?? ''}:${state.combatContext?.defLossPreview ?? ''}`;
+  }
+  return null;
+}
+
+function collectPlayableResponseCards(state, me) {
+  const out = [];
+  const hand = me.hand || [];
+  hand.forEach((cardId, index) => {
+    const card = getCard(cardId);
+    if (!card) return;
+    if (!canStartCast(state, me.id, card)) return;
+    if (card.timing !== 'instant' && card.timing !== 'combat') return;
+    out.push({ card, fromKit: false, index });
+  });
+  if (state.sandboxMode && me.sandboxKit?.length) {
+    me.sandboxKit.forEach((cardId, index) => {
+      const card = getCard(cardId);
+      if (!card) return;
+      if (!canStartCast(state, me.id, card)) return;
+      if (card.timing !== 'instant' && card.timing !== 'combat') return;
+      out.push({ card, fromKit: true, index });
+    });
+  }
+  return out;
+}
+
+function ensureChoicePick(ui, key) {
+  if (ui._choiceSessionKey !== key) {
+    ui._choiceSessionKey = key;
+    ui.choicePick = null;
+  }
+}
+
+export function renderChoiceOverlay(els, state, human, ui) {
+  const root = els.choiceOverlay;
+  if (!root) return;
+
+  const me = human;
+  const key = choiceSessionKey(state, me, ui);
+  const titleEl = els.choiceTitle;
+  const subEl = els.choiceSubtitle;
+  const optsEl = els.choiceOptions;
+  const footEl = els.choiceFooter;
+  if (!titleEl || !optsEl || !footEl) return;
+
+  if (!key) {
+    root.classList.add('hidden');
+    root.classList.remove('is-die-wait');
+    titleEl.textContent = '';
+    if (subEl) subEl.textContent = '';
+    optsEl.innerHTML = '';
+    footEl.innerHTML = '';
+    ui._choiceSessionKey = null;
+    ui.choicePick = null;
+    return;
+  }
+
+  ensureChoicePick(ui, key);
+  root.classList.remove('hidden');
+
+  optsEl.innerHTML = '';
+  footEl.innerHTML = '';
+  if (subEl) subEl.textContent = '';
+
+  const addOpt = ({ html, selected, onClick }) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `choice-opt${selected ? ' is-selected' : ''}`;
+    btn.innerHTML = html;
+    btn.addEventListener('click', () => onClick?.());
+    optsEl.appendChild(btn);
+    return btn;
+  };
+
+  const addFooter = ({ label, primary, disabled, onClick }) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = primary ? 'btn' : 'btn btn-ghost';
+    btn.textContent = label;
+    btn.disabled = !!disabled;
+    btn.addEventListener('click', () => {
+      if (!btn.disabled) onClick?.();
+    });
+    footEl.appendChild(btn);
+    return btn;
+  };
+
+  // —— Cast confirm ——
+  if (state.pendingCast && me.id === state.pendingCast.playerId && !state.pendingCast.hidden) {
+    const pc = state.pendingCast;
+    const card = getCard(pc.cardId);
+    const needDie = pc.needsDiePick && pc.targets?.dieIndex == null;
+    root.classList.toggle('is-die-wait', needDie);
+    titleEl.textContent = 'Conferma lancio';
+    if (subEl) {
+      subEl.textContent = needDie
+        ? `Clicca un dado al centro per lanciare ${card?.name || 'la carta'}.`
+        : `Vuoi lanciare ${card?.name || 'questa carta'}?`;
+    }
+    if (!needDie) {
+      addOpt({
+        html: `<strong>${escapeHtml(card?.name || 'Carta')}</strong><span>${escapeHtml(card?.description || 'Conferma il lancio')}</span>`,
+        onClick: () => ui.onCastConfirm?.(),
+      });
+    } else {
+      addOpt({
+        html: `<strong>Annulla</strong><span>Non lanciare ${escapeHtml(card?.name || 'la carta')}</span>`,
+        onClick: () => ui.onCastCancel?.(),
+      });
+    }
+    addFooter({
+      label: 'Annulla',
+      onClick: () => ui.onCastCancel?.(),
+    });
+    if (!needDie) {
+      addFooter({
+        label: 'Conferma',
+        primary: true,
+        onClick: () => ui.onCastConfirm?.(),
+      });
+    }
+    return;
+  }
+  root.classList.remove('is-die-wait');
+
+  // —— Bastione ——
+  if (state.pendingBastion && me.id === state.pendingBastion.defenderId) {
+    titleEl.textContent = 'Bastione';
+    if (subEl) subEl.textContent = 'Sei sotto attacco. Usare Bastione (+1 al dado di difesa più alto)?';
+    addOpt({
+      html: '<strong>Sì, Bastione</strong><span>+1 al dado di difesa più alto</span>',
+      onClick: () => ui.onBastionChoice?.(true),
+    });
+    addOpt({
+      html: '<strong>No</strong><span>Difendi senza Bastione</span>',
+      onClick: () => ui.onBastionChoice?.(false),
+    });
+    return;
+  }
+
+  // —— Targeting carta (reclute, isolamento, …) ——
+  if (
+    me.id === state.currentPlayerId &&
+    ui?.mode &&
+    String(ui.mode).startsWith('card_') &&
+    !(state.pendingChoice && me.id === state.pendingChoice.actorId)
+  ) {
+    const labels = {
+      card_recruit: ['Reclutamento', 'Clicca un tuo territorio per +2 armate.'],
+      card_supplies: ['Approvvigionamenti', 'Clicca un tuo territorio per +4 armate.'],
+      card_isolation: ['Isolamento', 'Clicca un territorio da bloccare.'],
+      card_betrayal: ['Tradimento', 'Clicca un territorio nemico con 1 armata.'],
+      card_teleport: [
+        'Teletrasporto',
+        ui.marchFrom ? 'Clicca la destinazione.' : 'Clicca il territorio di partenza.',
+      ],
+      card_forced_march: [
+        'Marcia',
+        ui.marchFrom ? 'Clicca la destinazione adiacente.' : 'Clicca il territorio di partenza.',
+      ],
+    };
+    const [title, hint] = labels[ui.mode] || ['Seleziona', 'Scegli un bersaglio sulla mappa.'];
+    titleEl.textContent = title;
+    if (subEl) subEl.textContent = hint;
+    addOpt({
+      html: '<strong>Annulla</strong><span>Annulla la carta e torna alla mano</span>',
+      onClick: () => ui.onCancelTargeting?.(),
+    });
+    return;
+  }
+
+  // —— Spostamento: origine selezionata ——
+  if (
+    me.id === state.currentPlayerId &&
+    state.phase === 'fortify' &&
+    ui?.selectedId &&
+    !(state.pendingChoice && me.id === state.pendingChoice.actorId)
+  ) {
+    const tid = ui.selectedId;
+    const name = TERRITORIES[tid]?.name || tid;
+    titleEl.textContent = 'Spostamento';
+    if (subEl) subEl.textContent = `Da ${name}: clicca la destinazione, oppure annulla.`;
+    addOpt({
+      html: '<strong>Annulla</strong><span>Deseleziona il territorio di partenza</span>',
+      onClick: () => ui.onCancelTargeting?.(),
+    });
+    return;
+  }
+
+  // —— Finestra risposta / combat (Instant + OK) ——
+  // pendingChoice ha priorità: non sovrascrivere quel modal.
+  if (
+    !state.vanillaMode &&
+    state.responseWindow &&
+    !state.pendingCast &&
+    !(state.pendingChoice && me.id === state.pendingChoice.actorId) &&
+    !(state.responseWindow.passedPlayerIds || []).includes(me.id)
+  ) {
+    const kind = state.responseWindow.kind;
+    const playable = collectPlayableResponseCards(state, me);
+    const rem = Math.ceil(windowRemainingMs(state, Date.now()) / 1000);
+    const title =
+      kind === 'combat'
+        ? 'Combattimento'
+        : kind === 'combat_counter'
+          ? 'Rispondi allo stack'
+          : 'Rispondi';
+    titleEl.textContent = title;
+    if (subEl) {
+      subEl.textContent =
+        playable.length > 0
+          ? `Hai ${rem}s · clicca una carta o passa`
+          : `Hai ${rem}s · passa se non fai nulla`;
+    }
+    for (const entry of playable) {
+      const meta = [entry.card.timing, entry.fromKit ? 'kit' : null].filter(Boolean).join(' · ');
+      addOpt({
+        html: `<strong>${escapeHtml(entry.card.name)}</strong>${meta ? `<em>${escapeHtml(meta)}</em>` : ''}<span>${escapeHtml(entry.card.description || '')}</span>`,
+        onClick: () =>
+          ui.onStartCast?.({
+            fromKit: entry.fromKit,
+            handIndex: entry.fromKit ? undefined : entry.index,
+            kitIndex: entry.fromKit ? entry.index : undefined,
+          }),
+      });
+    }
+    addOpt({
+      html: '<strong>OK per me</strong><span>Non rispondo in questa finestra</span>',
+      onClick: () => ui.onPassStack?.(),
+    });
+    return;
+  }
+
+  // —— pendingChoice ——
+  const pc = state.pendingChoice;
+  if (!pc || me.id !== pc.actorId) {
+    root.classList.add('hidden');
+    return;
+  }
+
+  titleEl.textContent = choiceTitleFor(pc);
+  if (subEl) subEl.textContent = pc.prompt || '';
+
+  if (pc.kind === 'scry') {
+    if (pc.items?.length) {
+      const item = pc.items[0];
+      const preview = document.createElement('div');
+      preview.className = 'choice-opt';
+      preview.style.cursor = 'default';
+      preview.innerHTML = `<strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.description)}</span>`;
+      optsEl.appendChild(preview);
+    }
+    addOpt({
+      html: '<strong>Pesca</strong><span>Aggiungi la carta alla mano</span>',
+      onClick: () => ui.onResolveChoice?.({ scryAction: 'draw' }),
+    });
+    addOpt({
+      html: '<strong>Metti in fondo</strong><span>La carta torna in fondo al mazzo</span>',
+      onClick: () => ui.onResolveChoice?.({ scryAction: 'bottom' }),
+    });
+    return;
+  }
+
+  if (pc.step === 'confirm' && (pc.kind === 'turncoat' || pc.kind === 'double_mandate')) {
+    for (const item of pc.items || []) {
+      const box = document.createElement('div');
+      box.className = 'choice-opt';
+      box.style.cursor = 'default';
+      box.innerHTML = `<strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.description)}</span>`;
+      optsEl.appendChild(box);
+    }
+    const yesLabel = pc.kind === 'turncoat' ? 'Scambia' : 'Sostituisci';
+    const noLabel = pc.kind === 'turncoat' ? 'Passa' : 'Rifiuta';
+    addOpt({
+      html: `<strong>${yesLabel}</strong>`,
+      onClick: () => ui.onResolveChoice?.({ confirm: true }),
+    });
+    addOpt({
+      html: `<strong>${noLabel}</strong>`,
+      onClick: () => ui.onResolveChoice?.({ confirm: false }),
+    });
+    return;
+  }
+
+  const multiSurveil = pc.kind === 'surveil' && pc.maxPick > 1;
+  for (const item of pc.items || []) {
+    if (item.type === 'mission') continue;
+
+    let html;
+    let selected = false;
+
+    if (item.type === 'player') {
+      const extra = item.handCount != null ? `${item.handCount} carte` : '';
+      html = `<strong>${escapeHtml(item.name)}</strong>${extra ? `<span>${escapeHtml(extra)}</span>` : ''}`;
+    } else if (item.type === 'relic') {
+      html = `<strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.description)}</span>`;
+    } else if (item.type === 'card') {
+      const meta = [item.timing, item.rarity].filter(Boolean).join(' · ');
+      html = `<strong>${escapeHtml(item.name)}</strong>${meta ? `<em>${escapeHtml(meta)}</em>` : ''}<span>${escapeHtml(item.description)}</span>`;
+      if (multiSurveil) selected = !!pc.picked?.includes(item.id);
+    } else {
+      continue;
+    }
+
+    addOpt({
+      html,
+      selected,
+      onClick: () => {
+        if (multiSurveil && item.type === 'card') {
+          ui.onResolveChoice?.({ cardId: item.id });
+          return;
+        }
+        if (item.type === 'player') ui.onResolveChoice?.({ targetPlayerId: item.id });
+        else if (item.type === 'relic') ui.onResolveChoice?.({ relicId: item.id });
+        else if (item.type === 'card') ui.onResolveChoice?.({ cardId: item.id });
+      },
+    });
+  }
+
+  if (multiSurveil) {
+    const picked = pc.picked?.length || 0;
+    if (subEl) {
+      subEl.textContent = `${pc.prompt || ''} — selezionate ${picked}/${pc.maxPick}`;
+    }
+    addFooter({
+      label: 'Conferma',
+      primary: true,
+      disabled: picked === 0,
+      onClick: () => ui.onResolveChoice?.({ confirm: true }),
+    });
+  }
+}
+
+function choiceTitleFor(pc) {
+  switch (pc.kind) {
+    case 'arcana':
+      return 'Arcana';
+    case 'surveil':
+      return 'Preveggenza';
+    case 'scry':
+      return 'Veggente';
+    case 'steal':
+      return 'Furto';
+    case 'sabotage':
+      return 'Sabotaggio';
+    case 'omniscience':
+      return 'Onniscienza';
+    case 'turncoat':
+      return 'Voltagabbana';
+    case 'double_mandate':
+      return 'Doppio mandato';
+    default:
+      return 'Scelta';
+  }
+}
+
+function renderSandboxPanel(els, state, human, ui) {
+  const root = els.sandboxFloat;
+  if (!root) return;
+  if (!state.sandboxMode || state.vanillaMode) {
+    root.classList.add('hidden');
+    return;
+  }
+  root.classList.remove('hidden');
+
+  const expanded = ui.sandboxExpanded !== false;
+  root.classList.toggle('is-collapsed', !expanded);
+  const toggle = els.sandboxFloatToggle;
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  }
+
+  const ownedIds = [human.relicId, ...(human.extraRelicIds || [])].filter(Boolean);
+  const owned = new Set(ownedIds);
+  const activeIds = state.activeEventIds?.length
+    ? [...state.activeEventIds]
+    : state.activeEventId
+      ? [state.activeEventId]
+      : [];
+  const active = new Set(activeIds);
+
+  const summary = els.sandboxFloatSummary;
+  if (summary) {
+    const bits = [
+      ...ownedIds.map((id) => {
+        const r = RELICS[id];
+        return r
+          ? `<span class="sandbox-chip is-on" title="${escapeHtml(r.description)}">${escapeHtml(r.name)}</span>`
+          : '';
+      }),
+      ...activeIds.map((id) => {
+        const e = EVENTS[id];
+        return e
+          ? `<span class="sandbox-chip is-on" title="${escapeHtml(e.description)}">${escapeHtml(e.name)}</span>`
+          : '';
+      }),
+    ].filter(Boolean);
+    summary.innerHTML = bits.length
+      ? bits.join('')
+      : '<span class="sandbox-float-empty">Nessuna opzione attiva</span>';
+  }
+
+  const body = els.sandboxFloatBody;
+  if (!body) return;
+
+  if (!expanded) {
+    body.innerHTML = '';
+    return;
+  }
+
+  const relicBtns = RELIC_IDS.map((id) => {
+    const r = RELICS[id];
+    const on = owned.has(id);
+    return `<button type="button" class="sandbox-chip${on ? ' is-on' : ''}" data-sandbox-relic="${id}" title="${escapeHtml(r.description)}">${escapeHtml(r.name)}</button>`;
+  }).join('');
+
+  const eventBtns = EVENT_IDS.map((id) => {
+    const e = EVENTS[id];
+    const on = active.has(id);
+    return `<button type="button" class="sandbox-chip${on ? ' is-on' : ''}" data-sandbox-event="${id}" title="${escapeHtml(e.description)}">${escapeHtml(e.name)}</button>`;
+  }).join('');
+
+  body.innerHTML = `
+    <p class="sandbox-hint">Clicca per aggiungere/rimuovere</p>
+    <div class="sandbox-section-label">Reliquie</div>
+    <div class="sandbox-chips">${relicBtns}</div>
+    <div class="sandbox-section-label">Eventi</div>
+    <div class="sandbox-chips">${eventBtns}</div>
+  `;
+
+  body.querySelectorAll('[data-sandbox-relic]').forEach((btn) => {
+    btn.addEventListener('click', () => ui.onSandboxToggleRelic?.(btn.getAttribute('data-sandbox-relic')));
+  });
+  body.querySelectorAll('[data-sandbox-event]').forEach((btn) => {
+    btn.addEventListener('click', () => ui.onSandboxToggleEvent?.(btn.getAttribute('data-sandbox-event')));
+  });
+}
+
+function renderSandboxKit(el, state, human, ui) {
   if (!el) return;
-  const pc = state.pendingCast;
-  if (!pc || pc.playerId !== human.id || pc.hidden) {
+  const kit = human.sandboxKit || [];
+  if (!state.sandboxMode || !kit.length) {
     el.classList.add('hidden');
     el.innerHTML = '';
     return;
   }
-  const card = getCard(pc.cardId);
   el.classList.remove('hidden');
-  const needDie = pc.needsDiePick && pc.targets?.dieIndex == null;
-  const dieHint = needDie ? ' — seleziona un dado al centro' : '';
-  el.innerHTML = `
-    <div class="hand-cast-text">Confermi <strong>${escapeHtml(card?.name || 'carta')}</strong>?${dieHint}</div>
-    <div class="hand-cast-actions">
-      <button type="button" class="btn" data-cast-confirm ${needDie ? 'disabled' : ''}>Conferma lancio</button>
-      <button type="button" class="btn btn-ghost" data-cast-cancel>Annulla</button>
-    </div>
-  `;
-  el.querySelector('[data-cast-confirm]')?.addEventListener('click', () => {
-    if (!needDie) ui.onCastConfirm?.();
+  el.innerHTML = '';
+  const label = document.createElement('div');
+  label.className = 'tray-label';
+  label.textContent = 'Kit sandbox (tutte le carte)';
+  el.appendChild(label);
+  const row = document.createElement('div');
+  row.className = 'hand sandbox-kit-row';
+  kit.forEach((cardId, index) => {
+    const card = getCard(cardId);
+    if (!card) return;
+    const selected = ui.selectedKitIndex === index;
+    const playable = canStartCast(state, human.id, card);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'card' + (selected ? ' selected' : '') + (playable ? ' playable' : '');
+    btn.innerHTML = `
+      <div class="ctype">${escapeHtml(card.timing || '')}${card.rarity ? ` · ${card.rarity}` : ''}</div>
+      <div class="cname">${escapeHtml(card.name)}</div>
+      ${card.territoryName ? `<div class="cterr">${escapeHtml(card.territoryName)}</div>` : ''}
+      <div class="cdesc">${escapeHtml(card.description)}</div>
+    `;
+    btn.addEventListener('click', () => ui.onKitCardClick?.(index, card));
+    row.appendChild(btn);
   });
-  el.querySelector('[data-cast-cancel]')?.addEventListener('click', () => ui.onCastCancel?.());
+  el.appendChild(row);
 }
 
 function renderHand(el, state, human, ui) {
@@ -385,7 +878,13 @@ function renderHand(el, state, human, ui) {
     return;
   }
   if (!human.hand.length) {
-    el.innerHTML = `<div class="hand-empty">${state.vanillaMode ? 'Nessuna carta territorio' : 'Nessuna carta'}</div>`;
+    el.innerHTML = `<div class="hand-empty">${
+      state.sandboxMode
+        ? 'Mano pesca vuota — usa il kit sopra'
+        : state.vanillaMode
+          ? 'Nessuna carta territorio'
+          : 'Nessuna carta'
+    }</div>`;
     return;
   }
   human.hand.forEach((cardId, index) => {
@@ -395,7 +894,6 @@ function renderHand(el, state, human, ui) {
     const selected = state.vanillaMode
       ? (ui.classicCardSelection || []).includes(index)
       : ui.selectedCardIndex === index;
-    const inWindow = !classic && !!state.responseWindow && !state.pendingCast;
     const playable = !classic && canStartCast(state, human.id, card);
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -403,7 +901,8 @@ function renderHand(el, state, human, ui) {
       'card' +
       (classic ? ' classic' : '') +
       (selected ? ' selected' : '') +
-      (playable ? ' playable' : '');
+      (playable ? ' playable' : '') +
+      (!classic && !playable && !state.vanillaMode ? ' dimmed' : '');
     if (classic) {
       btn.innerHTML = `
         <div class="ctype classic-symbol">${card.emoji}</div>
@@ -426,7 +925,7 @@ function renderHand(el, state, human, ui) {
 function renderLog(el, state) {
   const recent = state.log
     .filter((e) => e.type !== 'cast')
-    .slice(-40)
+    .slice(-80)
     .reverse();
   el.innerHTML = recent
     .map((e) => `<div class="entry ${e.type || ''}">${escapeHtml(e.message)}</div>`)
@@ -441,8 +940,13 @@ export function renderActions(el, state, ui) {
   const myTurn = pid === me.id;
   if (state.phase === 'game_over') return;
 
+  // Choice / Bastion / cast confirm → choice overlay (not here)
+
   if (state.pendingChoice && me.id === state.pendingChoice.actorId) {
-    renderChoicePicker(el, state, ui);
+    return;
+  }
+
+  if (state.pendingBastion && me.id === state.pendingBastion.defenderId) {
     return;
   }
 
@@ -468,44 +972,7 @@ export function renderActions(el, state, ui) {
     return;
   }
 
-  if (state.pendingBastion && me.id === state.pendingBastion.defenderId) {
-    const hint = document.createElement('p');
-    hint.className = 'line';
-    hint.style.margin = '0';
-    hint.textContent = 'Sei sotto attacco! Usare Bastione (+1 al dado di difesa più alto)?';
-    el.appendChild(hint);
-    const yes = document.createElement('button');
-    yes.type = 'button';
-    yes.className = 'btn';
-    yes.textContent = 'Sì, Bastione';
-    yes.addEventListener('click', () => ui.onBastionChoice?.(true));
-    const no = document.createElement('button');
-    no.type = 'button';
-    no.className = 'btn btn-ghost';
-    no.textContent = 'No';
-    no.addEventListener('click', () => ui.onBastionChoice?.(false));
-    el.appendChild(yes);
-    el.appendChild(no);
-    return;
-  }
-
   if (!myTurn) {
-    if (!state.vanillaMode && state.responseWindow && !state.pendingCast) {
-      const passed = state.responseWindow.passedPlayerIds || [];
-      if (!passed.includes(me.id)) {
-        const ok = document.createElement('button');
-        ok.type = 'button';
-        ok.className = 'btn btn-ghost';
-        ok.textContent = 'OK per me';
-        ok.addEventListener('click', () => ui.onPassStack?.());
-        el.appendChild(ok);
-      }
-      const hint = document.createElement('p');
-      hint.className = 'line';
-      hint.style.margin = '0';
-      hint.textContent = 'Finestra stack: clicca una carta Instant/Combat in mano per rispondere.';
-      el.appendChild(hint);
-    }
     return;
   }
 
@@ -558,20 +1025,6 @@ export function renderActions(el, state, ui) {
     el.appendChild(trade);
   }
 
-  if (
-    !state.vanillaMode &&
-    state.responseWindow &&
-    !state.pendingCast &&
-    !(state.responseWindow.passedPlayerIds || []).includes(me.id)
-  ) {
-    const ok = document.createElement('button');
-    ok.type = 'button';
-    ok.className = 'btn btn-ghost';
-    ok.textContent = 'OK per me';
-    ok.addEventListener('click', () => ui.onPassStack?.());
-    el.appendChild(ok);
-  }
-
   const end = document.createElement('button');
   end.type = 'button';
   end.className = 'btn';
@@ -587,111 +1040,4 @@ export function renderActions(el, state, ui) {
     (state.phase === 'reinforce' && state.reinforcementsRemaining > 0) || !canEndPhaseNow(state);
   end.addEventListener('click', () => ui.onEndPhase?.());
   el.appendChild(end);
-}
-
-function renderChoicePicker(el, state, ui) {
-  const pc = state.pendingChoice;
-  if (!pc) return;
-
-  const hint = document.createElement('p');
-  hint.className = 'line choice-prompt';
-  hint.style.margin = '0';
-  hint.textContent = pc.prompt;
-  el.appendChild(hint);
-
-  if (pc.kind === 'scry') {
-    if (pc.items?.length) {
-      const item = pc.items[0];
-      const preview = document.createElement('div');
-      preview.className = 'choice-card-preview';
-      preview.innerHTML = `<strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.description)}</span>`;
-      el.appendChild(preview);
-    }
-    const row = document.createElement('div');
-    row.className = 'choice-actions';
-    const drawBtn = document.createElement('button');
-    drawBtn.type = 'button';
-    drawBtn.className = 'btn';
-    drawBtn.textContent = 'Pesca';
-    drawBtn.addEventListener('click', () => ui.onResolveChoice?.({ scryAction: 'draw' }));
-    const bottomBtn = document.createElement('button');
-    bottomBtn.type = 'button';
-    bottomBtn.className = 'btn btn-ghost';
-    bottomBtn.textContent = 'Metti in fondo';
-    bottomBtn.addEventListener('click', () => ui.onResolveChoice?.({ scryAction: 'bottom' }));
-    row.appendChild(drawBtn);
-    row.appendChild(bottomBtn);
-    el.appendChild(row);
-  }
-
-  if (pc.step === 'confirm' && (pc.kind === 'turncoat' || pc.kind === 'double_mandate')) {
-    for (const item of pc.items) {
-      const box = document.createElement('div');
-      box.className = 'choice-mission-preview';
-      box.innerHTML = `<strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.description)}</span>`;
-      el.appendChild(box);
-    }
-    const row = document.createElement('div');
-    row.className = 'choice-actions';
-    const yes = document.createElement('button');
-    yes.type = 'button';
-    yes.className = 'btn';
-    yes.textContent = pc.kind === 'turncoat' ? 'Scambia' : 'Sostituisci';
-    yes.addEventListener('click', () => ui.onResolveChoice?.({ confirm: true }));
-    const no = document.createElement('button');
-    no.type = 'button';
-    no.className = 'btn btn-ghost';
-    no.textContent = pc.kind === 'turncoat' ? 'Passa' : 'Rifiuta';
-    no.addEventListener('click', () => ui.onResolveChoice?.({ confirm: false }));
-    row.appendChild(yes);
-    row.appendChild(no);
-    el.appendChild(row);
-    return;
-  }
-
-  const list = document.createElement('div');
-  list.className = 'choice-list';
-
-  for (const item of pc.items) {
-    if (item.type === 'mission') continue;
-
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn btn-ghost choice-item-btn';
-    const selected = pc.kind === 'surveil' && pc.maxPick > 1 && pc.picked?.includes(item.id);
-
-    if (item.type === 'player') {
-      const extra = item.handCount != null ? ` (${item.handCount} carte)` : '';
-      btn.innerHTML = `<strong>${escapeHtml(item.name)}</strong>${extra ? `<span>${escapeHtml(extra)}</span>` : ''}`;
-      btn.addEventListener('click', () => ui.onResolveChoice?.({ targetPlayerId: item.id }));
-    } else if (item.type === 'relic') {
-      btn.innerHTML = `<strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.description)}</span>`;
-      btn.addEventListener('click', () => ui.onResolveChoice?.({ relicId: item.id }));
-    } else if (item.type === 'card') {
-      const meta = [item.timing, item.rarity].filter(Boolean).join(' · ');
-      btn.innerHTML = `<strong>${escapeHtml(item.name)}</strong>${meta ? `<em>${escapeHtml(meta)}</em>` : ''}<span>${escapeHtml(item.description)}</span>`;
-      if (selected) btn.classList.add('is-selected');
-      btn.addEventListener('click', () => ui.onResolveChoice?.({ cardId: item.id }));
-    }
-
-    list.appendChild(btn);
-  }
-
-  if (list.childNodes.length) el.appendChild(list);
-
-  if (pc.kind === 'surveil' && pc.maxPick > 1) {
-    const picked = pc.picked?.length || 0;
-    const sub = document.createElement('p');
-    sub.className = 'line';
-    sub.style.margin = '0.35rem 0 0';
-    sub.textContent = `Selezionate ${picked}/${pc.maxPick} — clicca Conferma quando pronto.`;
-    el.appendChild(sub);
-    const ok = document.createElement('button');
-    ok.type = 'button';
-    ok.className = 'btn';
-    ok.disabled = picked === 0;
-    ok.textContent = 'Conferma';
-    ok.addEventListener('click', () => ui.onResolveChoice?.({ confirm: true }));
-    el.appendChild(ok);
-  }
 }

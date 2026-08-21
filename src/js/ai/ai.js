@@ -290,7 +290,7 @@ function aiAttack(state) {
   const pid = state.currentPlayerId;
   const f = fronts(state, pid);
   const must =
-    state.activeEventId === 'chaos' &&
+    ((state.activeEventIds || []).includes('chaos') || state.activeEventId === 'chaos') &&
     !state.mustAttackSatisfied;
 
   let best = null;

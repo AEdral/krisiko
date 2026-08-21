@@ -150,7 +150,7 @@ const CARD_BLUEPRINTS = [
     timing: 'action',
     rarity: 'epic',
     copies: 1,
-    description: 'Sostituisci fino a 3 eventi ambientali attivi.',
+    description: 'Scarta tutti gli eventi attivi e ne rivela 3 nuovi (max 3 attivi).',
     effect: { type: 'chaos_events', count: 3 },
   },
   {
@@ -280,4 +280,17 @@ export function createCardDeck(rng) {
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
   return deck;
+}
+
+/** One representative card id per unique effect (for sandbox kit). */
+export function getSandboxKitIds() {
+  const seen = new Set();
+  const ids = [];
+  for (const id of STANDARD_DECK_IDS) {
+    const card = CARDS[id];
+    if (!card || seen.has(card.baseId)) continue;
+    seen.add(card.baseId);
+    ids.push(id);
+  }
+  return ids;
 }

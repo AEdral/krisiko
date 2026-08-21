@@ -81,20 +81,99 @@ export function isCounterCard(card) {
   return card?.effect?.type === 'negate' || card?.effect?.type === 'jackal';
 }
 
-export function canRespondInstant(state, playerId) {
-  if (state.vanillaMode || !state.responseWindow) return false;
-  const turn = state.currentPlayerId;
+/** True se almeno un avversario ha Negare/Sciacallo giocabile sulla cima dello stack. */
+export function anyOpponentCanCounterTop(state) {
   const top = state.stack?.[state.stack.length - 1];
-  if (state.responseWindow.kind === 'action_response' && playerId === turn && (!top || top.playerId === turn)) {
-    return false;
+  if (!top) return false;
+  const target = getCard(top.cardId);
+  if (!target) return false;
+
+  const negateOk = ['common', 'rare'].includes(target.rarity);
+  const jackalOk = target.rarity === 'common';
+  if (!negateOk && !jackalOk) return false;
+
+  for (const pid of state.playerOrder || []) {
+    if (pid === top.playerId) continue; // mai counter sulle proprie carte
+    const p = state.players[pid];
+    if (!p) continue;
+    const ids = [...(p.hand || [])];
+    if (state.sandboxMode && p.sandboxKit?.length) ids.push(...p.sandboxKit);
+    for (const id of ids) {
+      const c = getCard(id);
+      if (!c) continue;
+      if (c.effect?.type === 'negate' && negateOk) return true;
+      if (c.effect?.type === 'jackal' && jackalOk) return true;
+    }
   }
-  return true;
+  return false;
+}
+
+/** Negare / Sciacallo: solo su carta avversaria in cima allo stack. */
+export function canCounterTop(state, playerId, card) {
+  if (!isCounterCard(card)) return true;
+  const top = state.stack?.[state.stack.length - 1];
+  if (!top || top.playerId === playerId) return false;
+  const target = getCard(top.cardId);
+  if (!target) return false;
+  if (card.effect?.type === 'jackal') return target.rarity === 'common';
+  if (card.effect?.type === 'negate') return ['common', 'rare'].includes(target.rarity);
+  return false;
+}
+
+/** Perdite previste dal confronto dadi attuali (raw + preview già sul context). */
+export function projectedCombatLosses(state) {
+  const ctx = state?.combatContext;
+  if (!ctx) return { attLoss: 0, defLoss: 0 };
+  if (ctx.attLossPreview != null && ctx.defLossPreview != null) {
+    return { attLoss: ctx.attLossPreview, defLoss: ctx.defLossPreview };
+  }
+  return pairLosses(ctx.rawAttDice, ctx.rawDefDice);
+}
+
+function pairLosses(attDice, defDice) {
+  const att = [...(attDice || [])].sort((a, b) => b - a);
+  const def = [...(defDice || [])].sort((a, b) => b - a);
+  const pairs = Math.min(att.length, def.length);
+  let attLoss = 0;
+  let defLoss = 0;
+  for (let i = 0; i < pairs; i++) {
+    if (att[i] > def[i]) defLoss += 1;
+    else attLoss += 1;
+  }
+  return { attLoss, defLoss };
 }
 
 export function canCastCombat(state, playerId) {
   if (!state.combatContext || !state.responseWindow) return false;
+  // Solo nella finestra combat principale (non durante counter a una combat card).
+  if (state.responseWindow.kind !== 'combat') return false;
   const ctx = state.combatContext;
-  return playerId === ctx.attackerId || playerId === ctx.defenderId;
+  if (playerId !== ctx.attackerId && playerId !== ctx.defenderId) return false;
+  // Una combat alla volta: finché ce n’è una in stack, aspetta risoluzione/counter.
+  if ((state.stack || []).some((e) => e.kind === 'combat')) return false;
+  const { attLoss, defLoss } = projectedCombatLosses(state);
+  if (playerId === ctx.attackerId && attLoss < 1) return false;
+  if (playerId === ctx.defenderId && defLoss < 1) return false;
+  return true;
+}
+
+export function anyoneCanCastCombat(state) {
+  const ctx = state?.combatContext;
+  if (!ctx) return false;
+  return canCastCombat(state, ctx.attackerId) || canCastCombat(state, ctx.defenderId);
+}
+
+export function canRespondInstant(state, playerId) {
+  if (state.vanillaMode || !state.responseWindow) return false;
+  // In combat “aperto” non si castano instant: Negare solo nella sottofinestra counter.
+  if (state.responseWindow.kind === 'combat') return false;
+  const top = state.stack?.[state.stack.length - 1];
+  if (top && top.playerId === playerId) return false;
+  const turn = state.currentPlayerId;
+  if (state.responseWindow.kind === 'action_response' && playerId === turn && (!top || top.playerId === turn)) {
+    return false;
+  }
+  return true;
 }
 
 export function canStartCast(state, playerId, card) {
@@ -103,7 +182,9 @@ export function canStartCast(state, playerId, card) {
 
   if (card.timing === 'action') {
     if (playerId !== state.currentPlayerId) return false;
-    if (state.combatContext || state.responseWindow?.kind === 'combat') return false;
+    if (state.combatContext || state.responseWindow?.kind === 'combat' || state.responseWindow?.kind === 'combat_counter') {
+      return false;
+    }
     if (state.phase === 'attack' && state.combatContext) return false;
     if (!['reinforce', 'attack', 'fortify'].includes(state.phase)) return false;
     if (state.responseWindow?.kind === 'action_response') return false;
@@ -112,7 +193,11 @@ export function canStartCast(state, playerId, card) {
 
   if (card.timing === 'instant') {
     if (!state.responseWindow) return false;
-    return canRespondInstant(state, playerId);
+    if (!canRespondInstant(state, playerId)) return false;
+    if (isCounterCard(card) && !canCounterTop(state, playerId, card)) return false;
+    // Instant non-counter (es. Isolamento) non in combat_counter.
+    if (state.responseWindow.kind === 'combat_counter' && !isCounterCard(card)) return false;
+    return true;
   }
 
   if (card.timing === 'combat') {
@@ -139,6 +224,12 @@ export function resolveStack(state, api) {
       }
       const target = stack.pop();
       const targetCard = getCard(target.cardId);
+      if (target.playerId === entry.playerId) {
+        api.discardEntry(entry);
+        stack.push(target);
+        api.log('Non puoi negare le tue carte.');
+        continue;
+      }
       if (api.isAlertProtected(target.playerId)) {
         api.discardEntry(entry);
         api.discardEntry(target);
@@ -152,6 +243,7 @@ export function resolveStack(state, api) {
         api.log(`${targetCard.name} non può essere negata.`);
         continue;
       }
+      api.revertCombatDie?.(target);
       api.discardEntry(entry);
       api.discardEntry(target);
       api.log(`${api.playerName(entry.playerId)} nega ${targetCard?.name || 'carta'}.`);
@@ -165,6 +257,12 @@ export function resolveStack(state, api) {
       }
       const target = stack.pop();
       const targetCard = getCard(target.cardId);
+      if (target.playerId === entry.playerId) {
+        api.discardEntry(entry);
+        stack.push(target);
+        api.log('Non puoi usare Sciacallo sulle tue carte.');
+        continue;
+      }
       if (api.isAlertProtected(target.playerId)) {
         api.discardEntry(entry);
         api.applyEntry(target);

@@ -29,6 +29,7 @@ const els = {
   setupFriendsCount: document.getElementById('setup-friends-count'),
   setupDraw: document.getElementById('setup-draw'),
   setupVanilla: document.getElementById('setup-vanilla'),
+  setupSandbox: document.getElementById('setup-sandbox'),
   setupError: document.getElementById('setup-error'),
   setupBack: document.getElementById('setup-back'),
   setupStart: document.getElementById('setup-start'),
@@ -55,14 +56,24 @@ const els = {
   topMeta: document.getElementById('top-meta'),
   opponentPanel: document.getElementById('opponent-panel'),
   eventBlock: document.getElementById('event-block'),
+  sandboxKit: document.getElementById('sandbox-kit'),
+  sandboxFloat: document.getElementById('sandbox-float'),
+  sandboxFloatToggle: document.getElementById('sandbox-float-toggle'),
+  sandboxFloatSummary: document.getElementById('sandbox-float-summary'),
+  sandboxFloatBody: document.getElementById('sandbox-float-body'),
+  sandboxFloatHeader: document.getElementById('sandbox-float-header'),
   playerRelic: document.getElementById('player-relic'),
   playerMission: document.getElementById('player-mission'),
   playerStats: document.getElementById('player-stats'),
   playerTray: document.getElementById('player-tray'),
   hand: document.getElementById('hand'),
-  handCastBar: document.getElementById('hand-cast-bar'),
   actions: document.getElementById('actions'),
   log: document.getElementById('log'),
+  choiceOverlay: document.getElementById('choice-overlay'),
+  choiceTitle: document.getElementById('choice-title'),
+  choiceSubtitle: document.getElementById('choice-subtitle'),
+  choiceOptions: document.getElementById('choice-options'),
+  choiceFooter: document.getElementById('choice-footer'),
   overlay: document.getElementById('overlay'),
   overlayTitle: document.getElementById('overlay-title'),
   overlayBody: document.getElementById('overlay-body'),
@@ -90,6 +101,7 @@ let lastShownBattleKey = null;
 const ui = {
   selectedId: null,
   selectedCardIndex: null,
+  selectedKitIndex: null,
   mode: null,
   marchFrom: null,
   highlightIds: null,
@@ -99,6 +111,8 @@ const ui = {
   serverTimeSkew: 0,
   dicePendingDismissed: false,
   classicCardSelection: [],
+  choicePick: null,
+  sandboxExpanded: false,
   onCardClick: null,
   onEndPhase: null,
   onClearCombatCard: null,
@@ -111,6 +125,7 @@ const NAME_KEY = 'krisiko.playerName';
 const MODE_KEY = 'krisiko.lobbyMode';
 const VANILLA_KEY = 'krisiko.vanillaMode';
 const DRAW_KEY = 'krisiko.drawEveryTurn';
+const SANDBOX_KEY = 'krisiko.sandboxMode';
 const LOGO_KRISIKO = 'assets/logo-wordmark.png';
 const LOGO_CLASSIC = 'assets/logo-vanilla-wordmark.png';
 const MAX_AI = MAX_PLAYERS - 1;
@@ -119,6 +134,7 @@ let extraHumans = loadExtraHumans();
 let lobbyMode = loadLobbyMode();
 let vanillaMode = loadVanillaMode();
 let drawEveryTurn = loadDrawEveryTurn();
+let sandboxMode = loadBool(SANDBOX_KEY, false);
 let onlineRoom = null;
 let netWait = false;
 let joiningRoomId = null;
@@ -185,6 +201,7 @@ function persistLobby() {
     localStorage.setItem(MODE_KEY, lobbyMode);
     localStorage.setItem(VANILLA_KEY, String(vanillaMode));
     localStorage.setItem(DRAW_KEY, String(drawEveryTurn));
+    localStorage.setItem(SANDBOX_KEY, String(sandboxMode));
     const name = (els.setupName?.value || els.joinName?.value || '').trim();
     if (name) localStorage.setItem(NAME_KEY, name.slice(0, 20));
   } catch {
@@ -198,10 +215,11 @@ function playerName(fromJoin = false) {
   return n || 'Giocatore';
 }
 
-function rulesSummary({ vanilla, draw }) {
-  const bits = [vanilla ? 'Classico' : 'Krisiko'];
-  if (!vanilla && draw) bits.push('pesca ogni turno');
+function rulesSummary({ vanilla, draw, sandbox }) {
+  const bits = [sandbox ? 'Sandbox' : vanilla ? 'Classico' : 'Krisiko'];
+  if (!vanilla && !sandbox && draw) bits.push('pesca ogni turno');
   if (vanilla) bits.push('carte territorio');
+  if (sandbox) bits.push('kit carte');
   return bits.map((b) => `<span class="pill">${b}</span>`).join('');
 }
 
@@ -319,14 +337,26 @@ async function shareWaitLink() {
 }
 
 function syncRuleToggles() {
+  if (sandboxMode) {
+    lobbyMode = 'local';
+    vanillaMode = false;
+  }
   if (els.setupDraw) {
-    els.setupDraw.disabled = vanillaMode;
+    els.setupDraw.disabled = vanillaMode || sandboxMode;
     els.setupDraw.setAttribute('aria-pressed', drawEveryTurn ? 'true' : 'false');
     els.setupDraw.textContent = drawEveryTurn ? 'On' : 'Off';
   }
   if (els.setupVanilla) {
+    els.setupVanilla.disabled = sandboxMode;
     els.setupVanilla.setAttribute('aria-pressed', vanillaMode ? 'true' : 'false');
     els.setupVanilla.textContent = vanillaMode ? 'On' : 'Off';
+  }
+  if (els.setupSandbox) {
+    els.setupSandbox.setAttribute('aria-pressed', sandboxMode ? 'true' : 'false');
+    els.setupSandbox.textContent = sandboxMode ? 'On' : 'Off';
+  }
+  if (els.setupModeOnline) {
+    els.setupModeOnline.disabled = sandboxMode;
   }
   syncBrandLogo(vanillaMode);
 }
@@ -512,7 +542,31 @@ function dispatchCast(action, opts = {}) {
 }
 
 function playActionCard(action, opts = {}) {
+  if (action.fromKit) {
+    dispatch(
+      {
+        type: 'PLAY_ACTION_CARD',
+        fromKit: true,
+        kitIndex: action.kitIndex ?? ui.selectedKitIndex,
+        territoryId: action.territoryId,
+        from: action.from,
+        to: action.to,
+        armies: action.armies,
+        riderTerritoryId: action.riderTerritoryId,
+        targetPlayerId: action.targetPlayerId,
+      },
+      opts,
+    );
+    return;
+  }
   dispatch({ type: 'PLAY_ACTION_CARD', ...action }, opts);
+}
+
+function clearCardSelection() {
+  ui.mode = null;
+  ui.selectedCardIndex = null;
+  ui.selectedKitIndex = null;
+  ui.marchFrom = null;
 }
 
 function dispatch(action, opts = {}) {
@@ -536,8 +590,9 @@ function startLocalGame() {
   state = createGame({
     seed: Date.now() & 0xffffffff,
     aiCount: Math.max(1, aiCount),
-    vanillaMode,
-    drawEveryTurn,
+    vanillaMode: sandboxMode ? false : vanillaMode,
+    drawEveryTurn: sandboxMode ? false : drawEveryTurn,
+    sandboxMode,
   });
   ui.localPlayerId = Object.values(state.players).find((p) => p.isHuman)?.id || 'P1';
   resetUi();
@@ -545,12 +600,14 @@ function startLocalGame() {
   els.overlay.classList.add('hidden');
   els.fortifyModal.classList.add('hidden');
   els.diceOverlay.classList.add('hidden');
+  els.app?.classList.toggle('sandbox-mode', !!sandboxMode);
   refresh();
   maybeRunAi();
 }
 
 function startSetup() {
   persistLobby();
+  if (sandboxMode) lobbyMode = 'local';
   if (lobbyMode === 'online') {
     void createOnlineRoom();
     return;
@@ -667,6 +724,7 @@ function joinOnlineRoom(roomId) {
 function resetUi() {
   ui.selectedId = null;
   ui.selectedCardIndex = null;
+  ui.selectedKitIndex = null;
   ui.classicCardSelection = [];
   ui.mode = null;
   ui.marchFrom = null;
@@ -712,13 +770,19 @@ function ensureStackClock() {
   if (stackClock || isOnline()) return;
   stackClock = setInterval(() => {
     if (!state || state.vanillaMode || isOnline()) return;
+    if (state.pendingInvasion) ensureInvasionUi();
     if (!state.responseWindow && !state.pendingCast) return;
     const hadCombat = !!state.combatContext;
     applyAction(state, { type: 'TICK_STACK', nowMs: Date.now() });
     processStackPhase(state);
     refresh();
     if (hadCombat && !state.combatContext) {
-      void maybeShowDice();
+      void (async () => {
+        await maybeShowDice();
+        ensureInvasionUi();
+      })();
+    } else {
+      ensureInvasionUi();
     }
     if (state.combatContext || hadCombat !== !!state.combatContext) {
       maybeRunAi();
@@ -749,11 +813,14 @@ function openInvasionModal() {
   if (!pending) return;
   const from = state.territories[pending.from];
   const to = state.territories[pending.to];
+  if (!from || !to) return;
   const pool = from.armies + to.armies;
   const max = pool - 1;
+  if (max < 1) return;
   const min = 1;
   moveModalMode = 'invasion';
   pendingFortify = null;
+  ui.selectedId = pending.to;
   els.moveModalTitle.textContent = 'Invasione';
   els.moveModalLabel.textContent = 'Armate nella zona conquistata';
   els.fortifyText.textContent = `${TERRITORIES[pending.from].name} → ${TERRITORIES[pending.to].name} (lascia almeno 1 dietro)`;
@@ -764,6 +831,14 @@ function openInvasionModal() {
   els.fortifyCount.textContent = els.fortifyRange.value;
   els.fortifyCancel.classList.add('hidden');
   els.fortifyModal.classList.remove('hidden');
+}
+
+/** Se c’è un’invasione da completare, riapri il modal (evita soft-lock). */
+function ensureInvasionUi() {
+  if (!state?.pendingInvasion) return;
+  if (!isMyTurn()) return;
+  if (!els.fortifyModal.classList.contains('hidden') && moveModalMode === 'invasion') return;
+  openInvasionModal();
 }
 
 els.fortifyRange.addEventListener('input', () => {
@@ -818,6 +893,7 @@ function refresh() {
   syncLiveCombatDice(els, state, ui);
   updateHint();
   checkOverlay();
+  ensureInvasionUi();
 }
 
 function updateHint() {
@@ -846,12 +922,23 @@ function updateHint() {
     els.mapHint.textContent = `Turno ${state.players[pid].name}…`;
     return;
   }
+  if (state.pendingInvasion && isMyTurn()) {
+    els.mapHint.textContent =
+      'Conquista: scegli quante armate lasciare nella zona conquistata (finestra Invasione).';
+    return;
+  }
   if (state.pendingCast && state.pendingCast.playerId === localId()) {
-    els.mapHint.textContent = 'Conferma o annulla il lancio sopra le carte.';
+    els.mapHint.textContent = 'Conferma o annulla il lancio nel pannello centrale.';
     return;
   }
   if (!state.vanillaMode && state.responseWindow && state.combatContext) {
-    els.mapHint.textContent = 'Combattimento: dadi al centro · carte verdi in mano per rispondere.';
+    const kind = state.responseWindow.kind;
+    if (kind === 'combat_counter') {
+      els.mapHint.textContent = 'Carta combat in stack: Negare/Sciacallo ora, o attendi il nuovo risultato.';
+    } else {
+      const ctx = state.combatContext;
+      els.mapHint.textContent = `Combattimento (−${ctx.attLossPreview ?? '?'} att / −${ctx.defLossPreview ?? '?'} dif): solo chi perde truppe può usare carte combat verdi.`;
+    }
     return;
   }
   if (!state.vanillaMode && state.responseWindow) {
@@ -919,7 +1006,11 @@ function updateHint() {
       state.vanillaMode && state.players[pid].hand.length >= 3
         ? ' Puoi scambiare set di 3 carte dalla mano.'
         : '';
-    els.mapHint.textContent = `Clicca i tuoi territori per piazzare ${state.reinforcementsRemaining} rinforzi.${tradeHint}`;
+    if (state.reinforcementsRemaining <= 0) {
+      els.mapHint.textContent = `Tutti i rinforzi piazzati — premi Fine rinforzi.${tradeHint}`;
+    } else {
+      els.mapHint.textContent = `Clicca i tuoi territori per piazzare ${state.reinforcementsRemaining} rinforzi.${tradeHint}`;
+    }
     return;
   }
   if (state.phase === 'attack') {
@@ -975,21 +1066,23 @@ function onTerritoryClick(id) {
     if (state.territories[id].owner !== pid) return;
     playActionCard({
       handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
       territoryId: id,
       riderTerritoryId: id,
     }, { ai: true });
-    ui.mode = null;
-    ui.selectedCardIndex = null;
+    clearCardSelection();
     return;
   }
 
   if (ui.mode === 'card_isolation') {
     playActionCard({
       handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
       territoryId: id,
     }, { ai: true });
-    ui.mode = null;
-    ui.selectedCardIndex = null;
+    clearCardSelection();
     return;
   }
 
@@ -998,10 +1091,11 @@ function onTerritoryClick(id) {
     if (!t || t.owner === pid || t.armies !== 1) return;
     playActionCard({
       handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
       territoryId: id,
     }, { ai: true });
-    ui.mode = null;
-    ui.selectedCardIndex = null;
+    clearCardSelection();
     return;
   }
 
@@ -1016,13 +1110,13 @@ function onTerritoryClick(id) {
     const max = state.territories[from].armies - 1;
     playActionCard({
       handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
       from,
       to: id,
       armies: max,
     }, { ai: true });
-    ui.mode = null;
-    ui.marchFrom = null;
-    ui.selectedCardIndex = null;
+    clearCardSelection();
     return;
   }
 
@@ -1037,13 +1131,13 @@ function onTerritoryClick(id) {
     const max = Math.min(3, state.territories[from].armies - 1);
     playActionCard({
       handIndex: ui.selectedCardIndex,
+      kitIndex: ui.selectedKitIndex,
+      fromKit: ui.selectedKitIndex != null,
       from,
       to: id,
       armies: max,
-    });
-    ui.mode = null;
-    ui.marchFrom = null;
-    ui.selectedCardIndex = null;
+    }, { ai: true });
+    clearCardSelection();
     return;
   }
 
@@ -1141,7 +1235,7 @@ ui.onCardClick = (index, card) => {
     if (state.pendingCast?.playerId === me) return;
     if (card.timing === 'instant' || card.timing === 'combat') {
       const canStart = getLegalActions(state, me).some(
-        (a) => a.type === 'CAST_START' && a.handIndex === index,
+        (a) => a.type === 'CAST_START' && !a.fromKit && a.handIndex === index,
       );
       if (canStart) {
         dispatchCast({ type: 'CAST_START', handIndex: index }, { ai: true });
@@ -1178,6 +1272,7 @@ ui.onCardClick = (index, card) => {
   if (state.responseWindow || state.combatContext || state.pendingCast) return;
 
   ui.selectedCardIndex = index;
+  ui.selectedKitIndex = null;
   const fx = card.effect?.type;
   if (fx === 'add_armies') {
     ui.mode = card.effect.split ? 'card_supplies' : 'card_recruit';
@@ -1202,6 +1297,116 @@ ui.onCardClick = (index, card) => {
   refresh();
 };
 
+function playKitOrHandCard(opts, card) {
+  const fromKit = !!opts.fromKit;
+  const index = fromKit ? opts.kitIndex : opts.handIndex;
+  const fx = card.effect?.type;
+  if (fx === 'add_armies') {
+    ui.mode = card.effect.split ? 'card_supplies' : 'card_recruit';
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else if (fx === 'free_move') {
+    ui.mode = 'card_forced_march';
+    ui.marchFrom = null;
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else if (fx === 'teleport_move') {
+    ui.mode = 'card_teleport';
+    ui.marchFrom = null;
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else if (fx === 'isolation') {
+    ui.mode = 'card_isolation';
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else if (fx === 'betrayal') {
+    ui.mode = 'card_betrayal';
+    if (fromKit) {
+      ui.selectedKitIndex = index;
+      ui.selectedCardIndex = null;
+    } else {
+      ui.selectedCardIndex = index;
+      ui.selectedKitIndex = null;
+    }
+  } else {
+    dispatch(
+      {
+        type: 'PLAY_ACTION_CARD',
+        ...(fromKit ? { fromKit: true, kitIndex: index } : { handIndex: index }),
+      },
+      { ai: true },
+    );
+    ui.selectedCardIndex = null;
+    ui.selectedKitIndex = null;
+    ui.mode = null;
+    return;
+  }
+  refresh();
+}
+
+ui.onKitCardClick = (index, card) => {
+  if (!state || !state.sandboxMode || state.phase === 'game_over') return;
+  const me = localId();
+
+  if (state.responseWindow || state.pendingCast) {
+    if (state.pendingCast?.playerId === me) return;
+    if (card.timing === 'instant' || card.timing === 'combat') {
+      const canStart = getLegalActions(state, me).some(
+        (a) => a.type === 'CAST_START' && a.fromKit && a.kitIndex === index,
+      );
+      if (canStart) {
+        dispatchCast({ type: 'CAST_START', fromKit: true, kitIndex: index }, { ai: true });
+      }
+    }
+    return;
+  }
+
+  if (!isMyTurn()) return;
+  if (state.pendingChoice && me === state.pendingChoice.actorId) return;
+
+  if (card.timing === 'combat') {
+    if (state.phase !== 'attack') return;
+    ui.selectedKitIndex = ui.selectedKitIndex === index ? null : index;
+    ui.selectedCardIndex = null;
+    ui.mode = null;
+    refresh();
+    return;
+  }
+
+  if (state.responseWindow || state.combatContext || state.pendingCast) return;
+  playKitOrHandCard({ fromKit: true, kitIndex: index }, card);
+};
+
+ui.onSandboxToggleRelic = (relicId) => {
+  if (!state?.sandboxMode) return;
+  dispatch({ type: 'SANDBOX_TOGGLE_RELIC', relicId, playerId: localId() });
+};
+
+ui.onSandboxToggleEvent = (eventId) => {
+  if (!state?.sandboxMode) return;
+  dispatch({ type: 'SANDBOX_TOGGLE_EVENT', eventId, playerId: localId() });
+};
+
 ui.onCastConfirm = () => {
   const pc = state?.pendingCast;
   const payload = { dieIndex: pc?.targets?.dieIndex };
@@ -1211,7 +1416,8 @@ ui.onCastConfirm = () => {
 ui.onSelectCastDie = (dieIndex) => {
   if (!state?.pendingCast) return;
   if (localId() !== state.pendingCast.playerId) return;
-  dispatchCast({ type: 'SET_CAST_DIE', dieIndex }, { ai: true });
+  // Un solo click: scegli il dado e conferma il lancio.
+  dispatchCast({ type: 'CAST_CONFIRM', dieIndex }, { ai: true });
 };
 
 ui.onPassStack = () => {
@@ -1219,8 +1425,33 @@ ui.onPassStack = () => {
   dispatchCast({ type: 'PASS_STACK' }, { ai: true });
 };
 
+ui.onStartCast = ({ fromKit, handIndex, kitIndex } = {}) => {
+  if (fromKit) {
+    if (kitIndex == null) return;
+    dispatchCast({ type: 'CAST_START', fromKit: true, kitIndex }, { ai: true });
+    return;
+  }
+  if (handIndex == null) return;
+  dispatchCast({ type: 'CAST_START', handIndex }, { ai: true });
+};
+
 ui.onCastCancel = () => {
   dispatchCast({ type: 'CAST_CANCEL' });
+};
+
+ui.onCancelTargeting = () => {
+  ui.mode = null;
+  ui.selectedCardIndex = null;
+  ui.selectedKitIndex = null;
+  ui.marchFrom = null;
+  ui.selectedId = null;
+  if (moveModalMode === 'fortify') {
+    pendingFortify = null;
+    moveModalMode = null;
+    els.fortifyModal?.classList.add('hidden');
+    els.fortifyCancel?.classList.remove('hidden');
+  }
+  refresh();
 };
 
 ui.onTradeClassic = () => {
@@ -1350,6 +1581,7 @@ function returnToHome() {
   els.fortifyModal?.classList.add('hidden');
   els.fortifyCancel?.classList.remove('hidden');
   els.app?.classList.remove('vanilla-mode');
+  els.app?.classList.remove('sandbox-mode');
   syncBrandLogo(false);
   showHome();
 }
@@ -1416,17 +1648,28 @@ els.setupModeLocal?.addEventListener('click', () => {
   renderSetup();
 });
 els.setupModeOnline?.addEventListener('click', () => {
+  if (sandboxMode) return;
   lobbyMode = 'online';
   renderSetup();
 });
 els.setupDraw?.addEventListener('click', () => {
-  if (vanillaMode) return;
+  if (vanillaMode || sandboxMode) return;
   drawEveryTurn = !drawEveryTurn;
   renderSetup();
 });
 els.setupVanilla?.addEventListener('click', () => {
+  if (sandboxMode) return;
   vanillaMode = !vanillaMode;
   if (vanillaMode) drawEveryTurn = false;
+  renderSetup();
+});
+els.setupSandbox?.addEventListener('click', () => {
+  sandboxMode = !sandboxMode;
+  if (sandboxMode) {
+    vanillaMode = false;
+    drawEveryTurn = false;
+    lobbyMode = 'local';
+  }
   renderSetup();
 });
 els.setupName?.addEventListener('change', persistLobby);
@@ -1484,6 +1727,68 @@ document.querySelector('.hud-stack')?.addEventListener('click', (ev) => {
   fold.classList.toggle('is-open', open);
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
 });
+
+els.sandboxFloatToggle?.addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  ui.sandboxExpanded = !ui.sandboxExpanded;
+  refresh();
+});
+
+(function bindSandboxFloatDrag() {
+  const root = els.sandboxFloat;
+  const handle = els.sandboxFloatHeader;
+  if (!root || !handle) return;
+
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let origLeft = 0;
+  let origTop = 0;
+
+  const onMove = (ev) => {
+    if (!dragging) return;
+    const map = els.map?.closest('.map-panel') || root.parentElement;
+    if (!map) return;
+    const bounds = map.getBoundingClientRect();
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    let left = origLeft + dx;
+    let top = origTop + dy;
+    const maxL = Math.max(0, bounds.width - root.offsetWidth);
+    const maxT = Math.max(0, bounds.height - root.offsetHeight);
+    left = Math.min(Math.max(0, left), maxL);
+    top = Math.min(Math.max(0, top), maxT);
+    root.style.left = `${left}px`;
+    root.style.top = `${top}px`;
+    root.style.right = 'auto';
+  };
+
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+  };
+
+  handle.addEventListener('pointerdown', (ev) => {
+    if (ev.target.closest('.sandbox-float-toggle')) return;
+    if (ev.button != null && ev.button !== 0) return;
+    dragging = true;
+    const rect = root.getBoundingClientRect();
+    const map = els.map?.closest('.map-panel') || root.parentElement;
+    const bounds = map.getBoundingClientRect();
+    startX = ev.clientX;
+    startY = ev.clientY;
+    origLeft = rect.left - bounds.left;
+    origTop = rect.top - bounds.top;
+    root.style.left = `${origLeft}px`;
+    root.style.top = `${origTop}px`;
+    root.style.right = 'auto';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    ev.preventDefault();
+  });
+})();
 
 const roomParam = new URLSearchParams(location.search).get('room');
 if (roomParam) {

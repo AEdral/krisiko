@@ -10,14 +10,22 @@ const FACES = {
 };
 
 function diceHtml(values, kind, opts = {}) {
-  const { selectable = false, selectedIndex = null } = opts;
+  const { selectable = false, selectedIndex = null, flash = null } = opts;
+  // Ordine L→R = indici 0..n (dopo sort: più alto a sinistra).
   return (values || [])
     .map((d, i) => {
       const sel = selectable && selectedIndex === i ? ' is-selected' : '';
+      const isFlash = !!(flash && flash.side === kind && flash.index === i);
+      const flashCls = isFlash ? ' is-flash' : '';
+      const face = FACES[d] || d;
+      const change =
+        isFlash && flash.from != null && flash.to != null
+          ? `<span class="die-change">${flash.from}→${flash.to}</span>`
+          : '';
       if (selectable) {
-        return `<button type="button" class="die ${kind}${sel}" data-die-index="${i}" aria-label="Dado ${d}">${FACES[d] || d}</button>`;
+        return `<button type="button" class="die ${kind}${sel}${flashCls}" data-die-index="${i}" aria-label="Dado ${d}">${face}${change}</button>`;
       }
-      return `<span class="die ${kind}">${FACES[d] || d}</span>`;
+      return `<span class="die ${kind}${flashCls}">${face}${change}</span>`;
     })
     .join('');
 }
@@ -45,6 +53,7 @@ export function syncLiveCombatDice(els, state, ui = {}) {
   const pickingDie = pc?.playerId === meId && pc.needsDiePick && !pc.hidden;
   const pickSide = pickingDie ? (pc.playerId === ctx.attackerId ? 'att' : 'def') : null;
   const selectedIndex = pickingDie ? pc.targets?.dieIndex ?? null : null;
+  const flash = ctx.dieFlash && Date.now() - (ctx.dieFlash.at || 0) < 4000 ? ctx.dieFlash : null;
 
   const fromName = TERRITORIES[ctx.from]?.name || ctx.from;
   const toName = TERRITORIES[ctx.to]?.name || ctx.to;
@@ -58,18 +67,27 @@ export function syncLiveCombatDice(els, state, ui = {}) {
   els.diceAtt.innerHTML = diceHtml(ctx.rawAttDice, 'att', {
     selectable: pickSide === 'att',
     selectedIndex: pickSide === 'att' ? selectedIndex : null,
+    flash,
   });
   els.diceDef.innerHTML = diceHtml(ctx.rawDefDice, 'def', {
     selectable: pickSide === 'def',
     selectedIndex: pickSide === 'def' ? selectedIndex : null,
+    flash,
   });
 
-  if (pickingDie && selectedIndex == null) {
-    els.diceResult.textContent = 'Seleziona il dado da modificare';
-  } else if (pickingDie) {
-    els.diceResult.textContent = 'Dado scelto — conferma il lancio in mano';
+  if (pickingDie) {
+    els.diceResult.textContent = 'Clicca un dado (1 click) per applicarlo';
+  } else if (flash) {
+    els.diceResult.textContent = `${flash.cardName || 'Carta'}: ${flash.from} → ${flash.to}`;
+  } else if (state.responseWindow?.kind === 'combat_counter') {
+    els.diceResult.textContent = 'Combat in stack — Negare ora o attendi il risultato';
   } else {
-    els.diceResult.textContent = 'Finestra aperta — usa mano e stack';
+    const a = ctx.attLossPreview;
+    const d = ctx.defLossPreview;
+    els.diceResult.textContent =
+      a != null
+        ? `Previsto: Att −${a} · Dif −${d} · solo chi perde può usare combat`
+        : 'Finestra aperta — carte verdi in mano';
   }
 
   overlay.querySelectorAll('[data-die-index]').forEach((btn) => {

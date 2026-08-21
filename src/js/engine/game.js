@@ -6,7 +6,7 @@ import {
   INITIAL_ARMIES_BY_PLAYERS,
 } from '../data/map.js';
 import { RELICS, RELIC_IDS } from '../data/relics.js';
-import { CARDS, createCardDeck, getCard, isHandPlayable, isCombatCard, combatCardNeedsDiePick, riderBonus } from '../data/cards.js';
+import { CARDS, createCardDeck, getCard, isHandPlayable, isCombatCard, combatCardNeedsDiePick, riderBonus, getSandboxKitIds } from '../data/cards.js';
 import {
   createClassicDeck,
   getClassicCard,
@@ -17,7 +17,7 @@ import {
   CLASSIC_HAND_LIMIT,
   isClassicCardId,
 } from '../data/classic-cards.js';
-import { EVENTS, createEventDeck } from '../data/events.js';
+import { EVENTS, createEventDeck, EVENT_IDS } from '../data/events.js';
 import { MISSIONS, MISSION_IDS, checkMission } from '../data/missions.js';
 import { createRng } from './rng.js';
 import {
@@ -37,6 +37,8 @@ import {
   canRespondInstant,
   canCastCombat,
   isCounterCard,
+  anyOpponentCanCounterTop,
+  anyoneCanCastCombat,
 } from './stack.js';
 import {
   getChoiceLegalActions,
@@ -199,8 +201,25 @@ function getRelicEffectByType(state, playerId, effectType) {
 }
 
 export function getActiveEvent(state) {
-  if (state.vanillaMode || !state.activeEventId) return null;
+  if (state.vanillaMode) return null;
+  if (Array.isArray(state.activeEventIds) && state.activeEventIds.length) {
+    return EVENTS[state.activeEventIds[0]] ?? null;
+  }
+  if (!state.activeEventId) return null;
   return EVENTS[state.activeEventId] ?? null;
+}
+
+export function getActiveEvents(state) {
+  if (state.vanillaMode) return [];
+  if (Array.isArray(state.activeEventIds) && state.activeEventIds.length) {
+    return state.activeEventIds.map((id) => EVENTS[id]).filter(Boolean);
+  }
+  const one = getActiveEvent(state);
+  return one ? [one] : [];
+}
+
+function findActiveEventByEffect(state, type) {
+  return getActiveEvents(state).find((ev) => ev.effect?.type === type) ?? null;
 }
 
 export function isImmuneToHarm(state, playerId) {
@@ -208,6 +227,7 @@ export function isImmuneToHarm(state, playerId) {
 }
 
 export function handLimit(state, playerId) {
+  if (state.sandboxMode) return 99;
   if (state.vanillaMode) return CLASSIC_HAND_LIMIT;
   let lim = BASE_HAND_SIZE;
   if (playerHasRelic(state, playerId, 'hand_size_bonus')) {
@@ -218,12 +238,14 @@ export function handLimit(state, playerId) {
 
 export function computeReinforcements(state, playerId) {
   const owned = getPlayerTerritories(state, playerId).length;
-  const event = getActiveEvent(state);
-  const harmImmune = event?.tag === 'harm' && isImmuneToHarm(state, playerId);
+  const events = getActiveEvents(state);
 
   let divisor = 3;
-  if (event?.effect?.type === 'reinforce_divisor' && !(event.tag === 'harm' && harmImmune)) {
-    divisor = event.effect.value;
+  for (const event of events) {
+    const harmImmune = event.tag === 'harm' && isImmuneToHarm(state, playerId);
+    if (event.effect?.type === 'reinforce_divisor' && !harmImmune) {
+      divisor = event.effect.value;
+    }
   }
 
   let n = Math.max(3, Math.floor(owned / divisor));
@@ -232,8 +254,11 @@ export function computeReinforcements(state, playerId) {
   if (playerHasRelic(state, playerId, 'extra_reinforcement')) {
     n += getRelicEffect(state, playerId).value;
   }
-  if (event?.effect?.type === 'extra_reinforcement') {
-    if (!(event.tag === 'harm' && harmImmune)) n += event.effect.value;
+  for (const event of events) {
+    const harmImmune = event.tag === 'harm' && isImmuneToHarm(state, playerId);
+    if (event.effect?.type === 'extra_reinforcement' && !harmImmune) {
+      n += event.effect.value;
+    }
   }
   return n;
 }
@@ -244,8 +269,7 @@ export function areAdjacent(a, b) {
 
 export function canFortifyBetween(state, from, to) {
   if (state.territories[from].owner !== state.territories[to].owner) return false;
-  const event = getActiveEvent(state);
-  if (event?.effect?.type === 'fortify_chain') {
+  if (findActiveEventByEffect(state, 'fortify_chain')) {
     return isConnectedOwned(state, from, to, state.territories[from].owner);
   }
   return areAdjacent(from, to);
@@ -356,29 +380,86 @@ function applyCombatCardEffect(state, card, attDice, defDice, isAttacker, dieInd
     const ri = dieIndex ?? dice.length - 1;
     if (dice[ri] !== undefined) {
       dice[ri] = 1 + state.rng.int(6);
-      dice.sort((a, b) => b - a);
     }
   } else if (card.effect.type === 'att_high_die_bonus') {
     attDice[0] = applyDieBonus(attDice[0], card.effect.value);
   }
 }
 
+/** Applica subito Vantaggio/Rilancio sui dadi live (senza riordinare). */
+function applyCombatDieToContext(state, playerId, card, targets) {
+  const ctx = state.combatContext;
+  if (!ctx || !card) return;
+  const isAtt = playerId === ctx.attackerId;
+  const dice = isAtt ? ctx.rawAttDice : ctx.rawDefDice;
+  const idx = targets?.dieIndex ?? 0;
+  if (dice[idx] == null) return;
+
+  const prev = dice[idx];
+  let next = prev;
+  if (card.effect.type === 'die_bonus') {
+    next = applyDieBonus(prev, card.effect.value);
+  } else if (card.effect.type === 'reroll_low' || card.effect.type === 'att_reroll_low') {
+    next = 1 + state.rng.int(6);
+  } else {
+    return;
+  }
+  dice[idx] = next;
+  targets.prevValue = prev;
+  targets.newValue = next;
+  targets.dieApplied = true;
+  ctx.dieFlash = {
+    side: isAtt ? 'att' : 'def',
+    index: idx,
+    from: prev,
+    to: next,
+    cardName: card.name,
+    at: Date.now(),
+  };
+  if (state.lastBattle?.pending) {
+    state.lastBattle.attDice = [...ctx.rawAttDice];
+    state.lastBattle.defDice = [...ctx.rawDefDice];
+  }
+  log(
+    state,
+    `${card.name}: dado ${isAtt ? 'attacco' : 'difesa'} #${idx + 1} ${prev} → ${next}.`,
+  );
+}
+
+function revertCombatDieFromEntry(state, entry) {
+  const ctx = state.combatContext;
+  const targets = entry?.targets;
+  if (!ctx || !targets?.dieApplied) return;
+  const isAtt = entry.playerId === ctx.attackerId;
+  const dice = isAtt ? ctx.rawAttDice : ctx.rawDefDice;
+  const idx = targets.dieIndex ?? 0;
+  if (dice[idx] == null || targets.prevValue == null) return;
+  dice[idx] = targets.prevValue;
+  ctx.dieFlash = {
+    side: isAtt ? 'att' : 'def',
+    index: idx,
+    from: targets.newValue,
+    to: targets.prevValue,
+    cardName: 'Annullato',
+    at: Date.now(),
+  };
+  if (state.lastBattle?.pending) {
+    state.lastBattle.attDice = [...ctx.rawAttDice];
+    state.lastBattle.defDice = [...ctx.rawDefDice];
+  }
+}
+
 function maxAttackDice(state, armies) {
   let max = Math.min(3, armies - 1);
-  const event = getActiveEvent(state);
-  if (event?.effect?.type === 'dice_cap') {
-    const immune = event.tag === 'harm' && false; // attacker checked separately
-    max = Math.min(max, event.effect.attack);
-  }
+  const event = findActiveEventByEffect(state, 'dice_cap');
+  if (event) max = Math.min(max, event.effect.attack);
   return Math.max(0, max);
 }
 
 function maxDefendDice(state, armies) {
   let max = Math.min(2, armies);
-  const event = getActiveEvent(state);
-  if (event?.effect?.type === 'dice_cap') {
-    max = Math.min(max, event.effect.defend);
-  }
+  const event = findActiveEventByEffect(state, 'dice_cap');
+  if (event) max = Math.min(max, event.effect.defend);
   return Math.max(0, max);
 }
 
@@ -433,17 +514,16 @@ function drawCard(state, playerId) {
 
 function ensureStartTurnEffects(state) {
   const pid = state.currentPlayerId;
-  const event = getActiveEvent(state);
-  if (event?.effect?.type === 'start_turn_lose_army') {
-    if (!(event.tag === 'harm' && isImmuneToHarm(state, pid))) {
-      const candidates = getPlayerTerritories(state, pid).filter(
-        (id) => state.territories[id].armies > 1
-      );
-      if (candidates.length) {
-        const tid = state.rng.pick(candidates);
-        state.territories[tid].armies -= 1;
-        log(state, `Peste: ${TERRITORIES[tid].name} perde 1 armata.`);
-      }
+  for (const event of getActiveEvents(state)) {
+    if (event?.effect?.type !== 'start_turn_lose_army') continue;
+    if (event.tag === 'harm' && isImmuneToHarm(state, pid)) continue;
+    const candidates = getPlayerTerritories(state, pid).filter(
+      (id) => state.territories[id].armies > 1
+    );
+    if (candidates.length) {
+      const tid = state.rng.pick(candidates);
+      state.territories[tid].armies -= 1;
+      log(state, `Peste: ${TERRITORIES[tid].name} perde 1 armata.`);
     }
   }
 }
@@ -488,14 +568,92 @@ function beginPlayerTurn(state) {
   }
 }
 
+export const DEFAULT_EVENT_CAP = 3;
+
+function syncActiveEventMirror(state) {
+  state.activeEventId = state.activeEventIds?.[0] || null;
+}
+
+function migrateActiveEvents(state) {
+  if (!Array.isArray(state.activeEventIds)) state.activeEventIds = [];
+  if (!state.activeEventIds.length && state.activeEventId) {
+    state.activeEventIds = [state.activeEventId];
+  }
+  if (!Array.isArray(state.eventDiscard)) state.eventDiscard = [];
+}
+
+function refillEventDeck(state) {
+  migrateActiveEvents(state);
+  if (state.eventDeck.length > 0) return;
+  const active = new Set(state.activeEventIds);
+  const pool = [];
+  for (const id of state.eventDiscard) {
+    if (!active.has(id) && !pool.includes(id)) pool.push(id);
+  }
+  state.eventDiscard = [];
+  for (const id of EVENT_IDS) {
+    if (!active.has(id) && !pool.includes(id)) pool.push(id);
+  }
+  state.eventDeck = state.rng.shuffle(pool);
+}
+
+function drawOneEventId(state) {
+  migrateActiveEvents(state);
+  for (let guard = 0; guard < EVENT_IDS.length + 2; guard++) {
+    refillEventDeck(state);
+    if (!state.eventDeck.length) return null;
+    const id = state.eventDeck.pop();
+    if (!state.activeEventIds.includes(id)) return id;
+    state.eventDiscard.push(id);
+  }
+  return null;
+}
+
+/** Reveal one global event (max `eventCap`, default 3). At cap, oldest is discarded. */
 function revealEvent(state) {
   if (state.vanillaMode) return;
-  if (state.eventDeck.length === 0) {
-    state.eventDeck = createEventDeck(state.rng);
+  migrateActiveEvents(state);
+  const cap = state.eventCap || DEFAULT_EVENT_CAP;
+  const id = drawOneEventId(state);
+  if (!id) return;
+  if (state.activeEventIds.length >= cap) {
+    const old = state.activeEventIds.shift();
+    if (old) {
+      state.eventDiscard.push(old);
+      log(state, `Evento scaduto: ${EVENTS[old]?.name || old}.`, { type: 'event' });
+    }
   }
-  state.activeEventId = state.eventDeck.pop();
-  const ev = EVENTS[state.activeEventId];
+  state.activeEventIds.push(id);
+  syncActiveEventMirror(state);
+  const ev = EVENTS[id];
   log(state, `Evento globale: ${ev.name} — ${ev.description}`, { type: 'event' });
+}
+
+/** Chaos card: discard all active events and reveal `count` new ones (capped). */
+function chaosReplaceEvents(state, count = DEFAULT_EVENT_CAP) {
+  if (state.vanillaMode) return;
+  migrateActiveEvents(state);
+  const cap = state.eventCap || DEFAULT_EVENT_CAP;
+  const n = Math.min(Math.max(1, count || cap), cap);
+  for (const id of state.activeEventIds) {
+    state.eventDiscard.push(id);
+  }
+  state.activeEventIds = [];
+  const names = [];
+  for (let i = 0; i < n; i++) {
+    const id = drawOneEventId(state);
+    if (!id) break;
+    state.activeEventIds.push(id);
+    names.push(EVENTS[id]?.name || id);
+  }
+  syncActiveEventMirror(state);
+  log(
+    state,
+    names.length
+      ? `Chaos: scartati gli eventi attivi → ${names.join(', ')}.`
+      : 'Chaos: nessun nuovo evento disponibile.',
+    { type: 'event' },
+  );
 }
 
 function checkVictory(state) {
@@ -523,10 +681,11 @@ function checkVictory(state) {
 
 /**
  * Create initial game state.
- * @param {{ seed?: number, humanId?: string, playerCount?: number, aiCount?: number, vanillaMode?: boolean, drawEveryTurn?: boolean, seats?: { id?: string, name?: string, isHuman?: boolean }[] }} opts
+ * @param {{ seed?: number, humanId?: string, playerCount?: number, aiCount?: number, vanillaMode?: boolean, drawEveryTurn?: boolean, sandboxMode?: boolean, seats?: { id?: string, name?: string, isHuman?: boolean }[] }} opts
  */
 export function createGame(opts = {}) {
-  const vanillaMode = !!opts.vanillaMode;
+  const sandboxMode = !!opts.sandboxMode && !opts.vanillaMode;
+  const vanillaMode = !!opts.vanillaMode && !sandboxMode;
   const drawEveryTurn = !vanillaMode && !!opts.drawEveryTurn;
   const rng = createRng(opts.seed ?? Date.now());
   const humanId = opts.humanId ?? 'P1';
@@ -617,13 +776,17 @@ export function createGame(opts = {}) {
     pendingRecycle: false,
     isolatedTerritories: {},
     vanillaMode,
+    sandboxMode,
     drawEveryTurn,
     cardDeck: vanillaMode ? createClassicDeck(rng) : createCardDeck(rng),
     cardDiscard: [],
     classicTrades: 0,
     pendingClassicDraw: false,
     eventDeck: vanillaMode ? [] : createEventDeck(rng),
+    eventDiscard: [],
+    eventCap: DEFAULT_EVENT_CAP,
     activeEventId: null,
+    activeEventIds: [],
     winnerId: null,
     lastBattle: null,
     log: [],
@@ -637,24 +800,123 @@ export function createGame(opts = {}) {
   };
   initStackState(state);
 
+  for (const pid of playerOrder) {
+    state.players[pid].sandboxKit = [];
+  }
+
   const modeBits = [
-    vanillaMode ? 'Classico' : 'Krisiko',
+    sandboxMode ? 'Sandbox' : vanillaMode ? 'Classico' : 'Krisiko',
     drawEveryTurn ? 'pesca ogni turno' : null,
   ].filter(Boolean);
   log(state, `Partita iniziata (${playerCount} giocatori, seed ${state.seed}${modeBits.length ? ` · ${modeBits.join(' · ')}` : ''}).`);
-  log(state, `Schieramento: 1 armata per territorio; ${startArmies} armate a testa, il resto a turni.`);
-  for (const pid of playerOrder) {
-    const p = players[pid];
-    if (!vanillaMode && p.relicId) {
-      log(state, `${p.name} reliquia: ${RELICS[p.relicId].name}. Obiettivo segreto assegnato.`);
-    } else {
-      log(state, `${p.name} obiettivo segreto assegnato.`);
+
+  if (sandboxMode) {
+    applySandboxStart(state);
+  } else {
+    log(state, `Schieramento: 1 armata per territorio; ${startArmies} armate a testa, il resto a turni.`);
+    for (const pid of playerOrder) {
+      const p = players[pid];
+      if (!vanillaMode && p.relicId) {
+        log(state, `${p.name} reliquia: ${RELICS[p.relicId].name}. Obiettivo segreto assegnato.`);
+      } else {
+        log(state, `${p.name} obiettivo segreto assegnato.`);
+      }
+    }
+    log(
+      state,
+      `Piazzamento: ${players[playerOrder[0]].name} — ${players[playerOrder[0]].setupRemaining} armate da schierare.`
+    );
+  }
+  return state;
+}
+
+function applySandboxStart(state) {
+  for (const pid of state.playerOrder) {
+    let rem = state.players[pid].setupRemaining;
+    const tids = getPlayerTerritories(state, pid);
+    let i = 0;
+    while (rem > 0 && tids.length) {
+      state.territories[tids[i % tids.length]].armies += 1;
+      rem -= 1;
+      i += 1;
+    }
+    state.players[pid].setupRemaining = 0;
+  }
+
+  const kit = getSandboxKitIds();
+  for (const pid of state.playerOrder) {
+    if (state.players[pid].isHuman) {
+      state.players[pid].sandboxKit = [...kit];
     }
   }
-  log(
-    state,
-    `Piazzamento: ${players[playerOrder[0]].name} — ${players[playerOrder[0]].setupRemaining} armate da schierare.`
-  );
+
+  state.round = 1;
+  state.currentPlayerId = state.playerOrder[0];
+  log(state, 'Sandbox: schieramento bilanciato automatico.');
+  log(state, `Sandbox: kit con ${kit.length} carte (una per tipo) + mazzo da 44.`);
+  for (const pid of state.playerOrder) {
+    const p = state.players[pid];
+    if (p.relicId) {
+      log(state, `${p.name} reliquia: ${RELICS[p.relicId].name}.`);
+    }
+  }
+  beginPlayerTurn(state);
+  // Sandbox: salta subito agli attacchi (armate già schierate).
+  state.reinforcementsRemaining = 0;
+  state.phase = 'attack';
+  log(state, 'Sandbox: fase attacco — usa il kit o le carte in mano.');
+}
+
+function sandboxToggleRelic(state, action) {
+  if (!state.sandboxMode) return state;
+  const pid = action.playerId || state.currentPlayerId;
+  const p = state.players[pid];
+  if (!p?.isHuman) return state;
+  const relicId = action.relicId;
+  if (!RELIC_IDS.includes(relicId)) return state;
+
+  if (p.relicId === relicId) {
+    p.relicId = null;
+    log(state, `Sandbox: rimossa reliquia ${RELICS[relicId].name}.`);
+    return state;
+  }
+  const extras = p.extraRelicIds || [];
+  const idx = extras.indexOf(relicId);
+  if (idx >= 0) {
+    extras.splice(idx, 1);
+    p.extraRelicIds = extras;
+    log(state, `Sandbox: rimossa reliquia ${RELICS[relicId].name}.`);
+    return state;
+  }
+  if (!p.relicId) {
+    p.relicId = relicId;
+  } else {
+    p.extraRelicIds = [...extras, relicId];
+  }
+  log(state, `Sandbox: aggiunta reliquia ${RELICS[relicId].name}.`);
+  return state;
+}
+
+function sandboxToggleEvent(state, action) {
+  if (!state.sandboxMode) return state;
+  const eventId = action.eventId;
+  if (!EVENT_IDS.includes(eventId)) return state;
+  migrateActiveEvents(state);
+  const idx = state.activeEventIds.indexOf(eventId);
+  if (idx >= 0) {
+    state.activeEventIds.splice(idx, 1);
+    syncActiveEventMirror(state);
+    log(state, `Sandbox: rimosso evento ${EVENTS[eventId].name}.`, { type: 'event' });
+  } else {
+    const cap = state.eventCap || DEFAULT_EVENT_CAP;
+    if (state.activeEventIds.length >= cap) {
+      const old = state.activeEventIds.shift();
+      if (old) state.eventDiscard.push(old);
+    }
+    state.activeEventIds.push(eventId);
+    syncActiveEventMirror(state);
+    log(state, `Sandbox: attivo evento ${EVENTS[eventId].name}.`, { type: 'event' });
+  }
   return state;
 }
 
@@ -817,7 +1079,14 @@ export function isActionAllowed(state, playerId, action) {
 
   switch (action.type) {
     case 'CAST_START':
-      return legal.some((a) => a.type === 'CAST_START' && a.handIndex === action.handIndex);
+      return legal.some(
+        (a) =>
+          a.type === 'CAST_START' &&
+          !!a.fromKit === !!action.fromKit &&
+          (action.fromKit
+            ? a.kitIndex === action.kitIndex
+            : a.handIndex === action.handIndex),
+      );
     case 'CAST_CONFIRM':
     case 'CAST_CANCEL':
       return state.pendingCast?.playerId === playerId;
@@ -830,7 +1099,14 @@ export function isActionAllowed(state, playerId, action) {
     case 'PASS_STACK':
       return legal.some((a) => a.type === 'PASS_STACK');
     case 'PLAY_ACTION_CARD':
-      return legal.some((a) => a.type === 'CAST_START' && a.handIndex === action.handIndex);
+      return legal.some(
+        (a) =>
+          a.type === 'CAST_START' &&
+          !!a.fromKit === !!action.fromKit &&
+          (action.fromKit
+            ? a.kitIndex === action.kitIndex
+            : a.handIndex === action.handIndex),
+      );
     case 'ATTACK':
       return legal.some(
         (a) => a.type === 'ATTACK' && a.from === action.from && a.to === action.to,
@@ -858,6 +1134,10 @@ export function isActionAllowed(state, playerId, action) {
       return legal.some(
         (a) => a.type === action.type && a.handIndex === action.handIndex,
       );
+    case 'SANDBOX_TOGGLE_RELIC':
+      return !!state.sandboxMode && !!action.relicId && RELIC_IDS.includes(action.relicId);
+    case 'SANDBOX_TOGGLE_EVENT':
+      return !!state.sandboxMode && !!action.eventId && EVENT_IDS.includes(action.eventId);
     default:
       return legal.some((a) => a.type === action.type);
   }
@@ -870,13 +1150,31 @@ export function applyAction(state, action) {
   if (state.phase === 'game_over') return state;
 
   if (!state.vanillaMode && state.responseWindow) {
-    const allowed = ['CAST_START', 'CAST_CONFIRM', 'CAST_CANCEL', 'TICK_STACK', 'RESOLVE_BASTION', 'PASS_STACK', 'SET_CAST_DIE'];
+    const allowed = [
+      'CAST_START',
+      'CAST_CONFIRM',
+      'CAST_CANCEL',
+      'TICK_STACK',
+      'RESOLVE_BASTION',
+      'PASS_STACK',
+      'SET_CAST_DIE',
+      'SANDBOX_TOGGLE_RELIC',
+      'SANDBOX_TOGGLE_EVENT',
+    ];
     if (!allowed.includes(action.type)) {
       return state;
     }
   }
   if (!state.vanillaMode && state.pendingCast) {
-    const allowed = ['CAST_CONFIRM', 'CAST_CANCEL', 'TICK_STACK', 'RESOLVE_BASTION', 'SET_CAST_DIE'];
+    const allowed = [
+      'CAST_CONFIRM',
+      'CAST_CANCEL',
+      'TICK_STACK',
+      'RESOLVE_BASTION',
+      'SET_CAST_DIE',
+      'SANDBOX_TOGGLE_RELIC',
+      'SANDBOX_TOGGLE_EVENT',
+    ];
     if (!allowed.includes(action.type)) {
       return state;
     }
@@ -890,7 +1188,9 @@ export function applyAction(state, action) {
   }
 
   if (state.pendingChoice && action.type !== 'RESOLVE_CHOICE' && action.type !== 'RESOLVE_ARCANA') {
-    return state;
+    if (action.type !== 'SANDBOX_TOGGLE_RELIC' && action.type !== 'SANDBOX_TOGGLE_EVENT') {
+      return state;
+    }
   }
 
   switch (action.type) {
@@ -928,6 +1228,10 @@ export function applyAction(state, action) {
         state.pendingCast.targets = { ...state.pendingCast.targets, dieIndex: action.dieIndex };
       }
       return state;
+    case 'SANDBOX_TOGGLE_RELIC':
+      return sandboxToggleRelic(state, action);
+    case 'SANDBOX_TOGGLE_EVENT':
+      return sandboxToggleEvent(state, action);
     case 'PLAY_ACTION_CARD':
       return castStart(state, action);
     case 'SET_COMBAT_CARD':
@@ -1010,8 +1314,9 @@ function endPhase(state) {
   }
 
   if (state.phase === 'attack') {
-    if (event?.effect?.type === 'must_attack_once') {
-      const immune = event.tag === 'harm' && isImmuneToHarm(state, pid);
+    const chaos = findActiveEventByEffect(state, 'must_attack_once');
+    if (chaos) {
+      const immune = chaos.tag === 'harm' && isImmuneToHarm(state, pid);
       if (!immune && !state.mustAttackSatisfied) {
         const canAttack = getLegalActions({ ...state, phase: 'attack' }).some((a) => a.type === 'ATTACK');
         // Recompute can-attack without END_PHASE
@@ -1267,8 +1572,7 @@ function applyCardEffect(state, pid, card, action) {
       }
       break;
     case 'chaos_events':
-      revealEvent(state);
-      log(state, `${card.name}: nuovo evento.`);
+      chaosReplaceEvents(state, card.effect?.count ?? DEFAULT_EVENT_CAP);
       break;
     case 'arcana':
       if (!beginArcanaDraft(state, pid, (msg) => log(state, msg))) {
@@ -1296,21 +1600,32 @@ function applyStackEntry(state, entry) {
 
   if (entry.kind === 'combat' && state.combatContext) {
     if (!state.combatContext.pendingCombatCards) state.combatContext.pendingCombatCards = [];
-    state.combatContext.pendingCombatCards.push({ entry, card, pid });
-    state.cardDiscard.push(entry.cardId);
+    // Applica il dado solo ora (dopo eventuale finestra Negare).
+    applyCombatDieToContext(state, pid, card, targets);
+    state.combatContext.pendingCombatCards.push({
+      entry,
+      card,
+      pid,
+      diceApplied: !!targets.dieApplied,
+    });
+    if (!entry.fromKit) state.cardDiscard.push(entry.cardId);
     log(state, `${playerName(state, pid)}: ${card.name} (combattimento).`);
+    refreshCombatLossPreview(state);
     return;
   }
 
   applyRider(state, pid, card, targets);
   applyCardEffect(state, pid, card, targets);
-  state.cardDiscard.push(entry.cardId);
+  if (!entry.fromKit) state.cardDiscard.push(entry.cardId);
 }
 
 function runStackResolution(state) {
   resolveStack(state, {
     applyEntry: (entry) => applyStackEntry(state, entry),
-    discardEntry: (entry) => state.cardDiscard.push(entry.cardId),
+    discardEntry: (entry) => {
+      if (!entry.fromKit) state.cardDiscard.push(entry.cardId);
+    },
+    revertCombatDie: (entry) => revertCombatDieFromEntry(state, entry),
     isAlertProtected: (playerId) => isAlertProtected(state, playerId),
     giveCardToPlayer: (playerId, cardId) => {
       const lim = handLimit(state, playerId);
@@ -1343,13 +1658,56 @@ function passStack(state, action) {
   return state;
 }
 
+function refreshCombatLossPreview(state) {
+  const ctx = state.combatContext;
+  if (!ctx) return;
+  let att = [...(ctx.rawAttDice || [])];
+  let def = [...(ctx.rawDefDice || [])];
+  if (ctx.fromArmiesBefore === 2 && playerHasRelic(state, ctx.attackerId, 'guerrilla_attack')) {
+    att[0] = applyDieBonus(att[0], getRelicEffectByType(state, ctx.attackerId, 'guerrilla_attack').value);
+  }
+  if (ctx.useBastion && playerHasRelic(state, ctx.defenderId, 'bastion_defense')) {
+    def[0] = applyDieBonus(def[0], getRelicEffectByType(state, ctx.defenderId, 'bastion_defense').value);
+  }
+  att.sort((a, b) => b - a);
+  def.sort((a, b) => b - a);
+  const pairs = Math.min(att.length, def.length);
+  let attLoss = 0;
+  let defLoss = 0;
+  for (let i = 0; i < pairs; i++) {
+    if (att[i] > def[i]) defLoss += 1;
+    else attLoss += 1;
+  }
+  ctx.attLossPreview = attLoss;
+  ctx.defLossPreview = defLoss;
+  if (state.lastBattle?.pending) {
+    state.lastBattle.attDice = [...ctx.rawAttDice];
+    state.lastBattle.defDice = [...ctx.rawDefDice];
+    state.lastBattle.attLoss = attLoss;
+    state.lastBattle.defLoss = defLoss;
+  }
+}
+
 function closeResponseWindow(state, nowMs) {
   if (!state.responseWindow) return state;
+  const kind = state.responseWindow.kind;
   runStackResolution(state);
   state.responseWindow = null;
-  if (state.combatContext) {
-    finishCombatFromContext(state);
+
+  if (!state.combatContext) return state;
+
+  if (kind === 'combat_counter') {
+    refreshCombatLossPreview(state);
+    openResponseWindow(state, 'combat', nowMs);
+    if (!anyoneCanCastCombat(state)) {
+      log(state, 'Nessuna altra carta combat giocabile — risoluzione.');
+      state.responseWindow = null;
+      finishCombatFromContext(state);
+    }
+    return state;
   }
+
+  finishCombatFromContext(state);
   return state;
 }
 
@@ -1362,32 +1720,88 @@ export function tickStack(state, action = {}) {
   return closeResponseWindow(state, nowMs);
 }
 
-function pushCastToStack(state, actor, card, handIndex, targets, nowMs) {
-  if (state.players[actor].hand[handIndex] !== card.id) return false;
-  state.players[actor].hand.splice(handIndex, 1);
+function pushCastToStack(state, actor, card, handIndex, targets, nowMs, opts = {}) {
+  const fromKit = !!opts.fromKit;
+  if (fromKit) {
+    const kit = state.players[actor].sandboxKit || [];
+    if (kit[handIndex] !== card.id) return false;
+  } else {
+    if (state.players[actor].hand[handIndex] !== card.id) return false;
+    state.players[actor].hand.splice(handIndex, 1);
+  }
   pushStackEntry(state, {
     playerId: actor,
     cardId: card.id,
     kind: card.timing,
     targets: targets || {},
+    fromKit,
   });
 
-  if (card.timing === 'action') {
+  log(state, `${playerName(state, actor)} lancia ${card.name}${fromKit ? ' (kit)' : ''}.`);
+
+  // Combat: una alla volta. Se qualcuno può Negare → sottofinestra; altrimenti applica subito.
+  if (card.timing === 'combat') {
+    if (anyOpponentCanCounterTop(state)) {
+      if (state.responseWindow) {
+        state.responseWindow.kind = 'combat_counter';
+        resetWindowDeadline(state, nowMs);
+        resumeResponseWindow(state, nowMs);
+      } else {
+        openResponseWindow(state, 'combat_counter', nowMs);
+      }
+      log(state, 'Finestra risposta: Negare/Sciacallo sulla carta combat.');
+      return true;
+    }
+    // Nessun counter → risolvi subito la combat card e resta in finestra combat.
+    runStackResolution(state);
+    refreshCombatLossPreview(state);
+    if (state.responseWindow) {
+      state.responseWindow.kind = 'combat';
+      resetWindowDeadline(state, nowMs);
+      resumeResponseWindow(state, nowMs);
+    }
+    if (!anyoneCanCastCombat(state)) {
+      log(state, 'Nessuna altra carta combat giocabile — risoluzione.');
+      state.responseWindow = null;
+      finishCombatFromContext(state);
+    }
+    return true;
+  }
+
+  // Action / Instant (Negare-Sciacallo): timer solo se un AVVERSARIO può counterare.
+  if (anyOpponentCanCounterTop(state)) {
     if (!state.responseWindow) openResponseWindow(state, 'action_response', nowMs);
     else resetWindowDeadline(state, nowMs);
-  } else if (state.responseWindow) {
-    resetWindowDeadline(state, nowMs);
+    resumeResponseWindow(state, nowMs);
+    return true;
   }
-  if (state.responseWindow) resumeResponseWindow(state, nowMs);
-  log(state, `${playerName(state, actor)} lancia ${card.name}.`);
+
+  // Nessun counter possibile → risolvi subito (niente attesa 10s).
+  if (state.responseWindow?.kind === 'action_response' || state.responseWindow?.kind === 'combat_counter') {
+    const kind = state.responseWindow.kind;
+    runStackResolution(state);
+    state.responseWindow = null;
+    if (kind === 'combat_counter' && state.combatContext) {
+      refreshCombatLossPreview(state);
+      openResponseWindow(state, 'combat', nowMs);
+      if (!anyoneCanCastCombat(state)) {
+        state.responseWindow = null;
+        finishCombatFromContext(state);
+      }
+    }
+  } else if (!state.responseWindow) {
+    runStackResolution(state);
+  }
   return true;
 }
 
 function castStart(state, action) {
   const nowMs = stackNow(action);
   const actor = action.playerId || state.currentPlayerId;
-  const handIndex = action.handIndex;
-  const cardId = state.players[actor].hand[handIndex];
+  const fromKit = !!(state.sandboxMode && action.fromKit);
+  const handIndex = fromKit ? action.kitIndex : action.handIndex;
+  const source = fromKit ? state.players[actor].sandboxKit || [] : state.players[actor].hand;
+  const cardId = source[handIndex];
   const card = getCard(cardId);
   if (!card || !canStartCast(state, actor, card)) return state;
   if (state.pendingCast) return state;
@@ -1402,7 +1816,7 @@ function castStart(state, action) {
   };
 
   if (card.timing === 'action') {
-    pushCastToStack(state, actor, card, handIndex, targets, nowMs);
+    pushCastToStack(state, actor, card, handIndex, targets, nowMs, { fromKit });
     return state;
   }
 
@@ -1412,9 +1826,16 @@ function castStart(state, action) {
     handIndex,
     kind: card.timing,
     targets,
+    fromKit,
     needsDiePick: combatCardNeedsDiePick(card) && !!state.combatContext,
   };
   if (state.responseWindow) pauseResponseWindow(state, nowMs);
+
+  // Instant senza target (Negare/Sciacallo): conferma al primo click sulla carta.
+  if (card.timing === 'instant' && (card.effect?.type === 'negate' || card.effect?.type === 'jackal')) {
+    return castConfirm(state, { ...action, playerId: actor, nowMs });
+  }
+
   return state;
 }
 
@@ -1424,7 +1845,10 @@ function castConfirm(state, action) {
   if (!state.pendingCast || state.pendingCast.playerId !== actor) return state;
   const pc = state.pendingCast;
   const card = getCard(pc.cardId);
-  if (!card || state.players[actor].hand[pc.handIndex] !== pc.cardId) {
+  const source = pc.fromKit
+    ? state.players[actor].sandboxKit || []
+    : state.players[actor].hand;
+  if (!card || source[pc.handIndex] !== pc.cardId) {
     state.pendingCast = null;
     if (state.responseWindow) resumeResponseWindow(state, nowMs);
     return state;
@@ -1434,7 +1858,9 @@ function castConfirm(state, action) {
   if (action.dieIndex != null) targets.dieIndex = action.dieIndex;
 
   state.pendingCast = null;
-  pushCastToStack(state, actor, card, pc.handIndex, targets, nowMs);
+  const pushed = pushCastToStack(state, actor, card, pc.handIndex, targets, nowMs, { fromKit: !!pc.fromKit });
+  // Combat: effetto dadi solo dopo risoluzione stack (Negare prima).
+  void pushed;
   return state;
 }
 
@@ -1463,23 +1889,20 @@ function finishCombatFromContext(state) {
   let attDice = [...ctx.rawAttDice];
   let defDice = [...ctx.rawDefDice];
 
-  const preCards = (ctx.pendingCombatCards || []).filter(
-    (c) => (c.card.effect.combatPhase || 'pre_compare') === 'pre_compare',
-  );
-  const postCards = (ctx.pendingCombatCards || []).filter(
-    (c) => c.card.effect.combatPhase === 'post_compare',
-  );
-
-  for (const { card, pid: cpid, entry } of preCards) {
-    const isAtt = cpid === pid;
-    applyCombatCardEffect(state, card, attDice, defDice, isAtt, entry?.targets?.dieIndex);
-  }
-
+  // Effetti Vantaggio/Rilancio già applicati al cast (raw*). Qui solo bonus reliquia.
   if (ctx.fromArmiesBefore === 2 && playerHasRelic(state, pid, 'guerrilla_attack')) {
     attDice[0] = applyDieBonus(attDice[0], getRelicEffectByType(state, pid, 'guerrilla_attack').value);
   }
   if (ctx.useBastion && playerHasRelic(state, defPid, 'bastion_defense')) {
     defDice[0] = applyDieBonus(defDice[0], getRelicEffectByType(state, defPid, 'bastion_defense').value);
+  }
+
+  // Fallback: carte combat in pending senza dieApplied (es. AI legacy / sync).
+  const pending = ctx.pendingCombatCards || [];
+  for (const { card, pid: cpid, entry, diceApplied } of pending) {
+    if (diceApplied || entry?.targets?.dieApplied) continue;
+    const isAtt = cpid === pid;
+    applyCombatCardEffect(state, card, attDice, defDice, isAtt, entry?.targets?.dieIndex);
   }
 
   attDice.sort((a, b) => b - a);
@@ -1493,27 +1916,6 @@ function finishCombatFromContext(state) {
     else attLoss += 1;
   }
 
-  for (const { card, pid: cpid, entry } of postCards) {
-    const isAtt = cpid === pid;
-    if (card.effect.type === 'reroll_low' || card.effect.type === 'att_reroll_low') {
-      const dice = isAtt ? attDice : defDice;
-      const idx = entry?.targets?.dieIndex ?? dice.length - 1;
-      if (dice[idx] !== undefined) {
-        dice[idx] = 1 + state.rng.int(6);
-        dice.sort((a, b) => b - a);
-      }
-    }
-    attDice.sort((a, b) => b - a);
-    defDice.sort((a, b) => b - a);
-    pairs = Math.min(attDice.length, defDice.length);
-    attLoss = 0;
-    defLoss = 0;
-    for (let i = 0; i < pairs; i++) {
-      if (attDice[i] > defDice[i]) defLoss += 1;
-      else attLoss += 1;
-    }
-  }
-
   from.armies -= attLoss;
   to.armies -= defLoss;
   state.players[pid].armiesLostThisTurn = (state.players[pid].armiesLostThisTurn || 0) + attLoss;
@@ -1522,13 +1924,16 @@ function finishCombatFromContext(state) {
   state.mustAttackSatisfied = true;
 
   let conquered = false;
-  let usedCardId = preCards[0]?.entry?.cardId || postCards[0]?.entry?.cardId || null;
 
   if (to.armies <= 0) {
     const prevOwner = to.owner;
     to.owner = pid;
     const moveMax = from.armies - 1;
-    const auto = state.players[pid].isHuman ? 1 : Math.max(1, Math.min(moveMax, ctx.attDiceCount));
+    // Minimo = dadi d’attacco usati (classico); umano poi redistribuisce col modal.
+    const minMove = Math.max(1, Math.min(moveMax, ctx.attDiceCount || 1));
+    const auto = state.players[pid].isHuman
+      ? minMove
+      : Math.max(1, Math.min(moveMax, ctx.attDiceCount));
     from.armies -= auto;
     to.armies = auto;
     const conquerFx = getRelicEffectByType(state, pid, 'conquer_bonus_army');
@@ -1543,6 +1948,7 @@ function finishCombatFromContext(state) {
     conquered = true;
     state.conqueredThisTurn = true;
     state.conquersThisTurn = (state.conquersThisTurn ?? 0) + 1;
+    // Umano: sempre chiedere redistribuzione se resta qualcosa da spostare.
     if (state.players[pid].isHuman && from.armies > 1) {
       state.pendingInvasion = { from: ctx.from, to: ctx.to };
     }
@@ -1622,6 +2028,19 @@ function getStackActions(state, actorId) {
         actions.push({ type: 'CAST_START', handIndex: i, playerId: pid });
       }
     }
+    if (state.sandboxMode) {
+      const kit = state.players[pid].sandboxKit || [];
+      for (let i = 0; i < kit.length; i++) {
+        const card = getCard(kit[i]);
+        if (
+          card?.timing === 'action' &&
+          isHandPlayable(card, state.phase) &&
+          canStartCast(state, pid, card)
+        ) {
+          actions.push({ type: 'CAST_START', fromKit: true, kitIndex: i, playerId: pid });
+        }
+      }
+    }
     return actions;
   }
 
@@ -1636,6 +2055,19 @@ function getStackActions(state, actorId) {
       }
       if (card.timing === 'combat' && canCastCombat(state, pid) && canStartCast(state, pid, card)) {
         actions.push({ type: 'CAST_START', handIndex: i, playerId: pid });
+      }
+    }
+    if (state.sandboxMode) {
+      const kit = state.players[pid].sandboxKit || [];
+      for (let i = 0; i < kit.length; i++) {
+        const card = getCard(kit[i]);
+        if (!card) continue;
+        if (card.timing === 'instant' && canRespondInstant(state, pid) && canStartCast(state, pid, card)) {
+          actions.push({ type: 'CAST_START', fromKit: true, kitIndex: i, playerId: pid });
+        }
+        if (card.timing === 'combat' && canCastCombat(state, pid) && canStartCast(state, pid, card)) {
+          actions.push({ type: 'CAST_START', fromKit: true, kitIndex: i, playerId: pid });
+        }
       }
     }
   }
@@ -1730,18 +2162,22 @@ function resolveAttack(state, action) {
 
   let attDiceCount = Math.min(action.attackDice ?? 3, from.armies - 1, 3);
   let defDiceCount = Math.min(2, to.armies);
-  const event = getActiveEvent(state);
-  const attImmune = event?.tag === 'harm' && isImmuneToHarm(state, pid);
-  const defImmune = event?.tag === 'harm' && isImmuneToHarm(state, defPid);
-  if (event?.effect?.type === 'dice_cap') {
-    if (!attImmune) attDiceCount = Math.min(attDiceCount, event.effect.attack);
-    if (!defImmune) defDiceCount = Math.min(defDiceCount, event.effect.defend);
+  for (const event of getActiveEvents(state)) {
+    const attImmune = event.tag === 'harm' && isImmuneToHarm(state, pid);
+    const defImmune = event.tag === 'harm' && isImmuneToHarm(state, defPid);
+    if (event.effect?.type === 'dice_cap') {
+      if (!attImmune) attDiceCount = Math.min(attDiceCount, event.effect.attack);
+      if (!defImmune) defDiceCount = Math.min(defDiceCount, event.effect.defend);
+    }
   }
 
   let rawAttDice = rollDice(attDiceCount, state.rng);
   let rawDefDice = rollDice(defDiceCount, state.rng);
-  if (event?.effect?.type === 'attack_high_die_penalty' && !attImmune) {
-    rawAttDice[0] = applyDieBonus(rawAttDice[0], -event.effect.value);
+  for (const event of getActiveEvents(state)) {
+    const attImmune = event.tag === 'harm' && isImmuneToHarm(state, pid);
+    if (event.effect?.type === 'attack_high_die_penalty' && !attImmune) {
+      rawAttDice[0] = applyDieBonus(rawAttDice[0], -event.effect.value);
+    }
   }
   rawAttDice.sort((a, b) => b - a);
   rawDefDice.sort((a, b) => b - a);
@@ -1760,15 +2196,18 @@ function resolveAttack(state, action) {
   };
 
   openResponseWindow(state, 'combat', nowMs);
+  refreshCombatLossPreview(state);
   log(
     state,
-    `Attacco ${TERRITORIES[action.from].name}→${TERRITORIES[action.to].name}: dadi ${rawAttDice.join(',')} vs ${rawDefDice.join(',')} — finestra risposta.`,
+    `Attacco ${TERRITORIES[action.from].name}→${TERRITORIES[action.to].name}: dadi ${rawAttDice.join(',')} vs ${rawDefDice.join(',')} (prev. −${state.combatContext.attLossPreview} att / −${state.combatContext.defLossPreview} dif).`,
   );
   state.lastBattle = {
     from: action.from,
     to: action.to,
     attDice: rawAttDice,
     defDice: rawDefDice,
+    attLoss: state.combatContext.attLossPreview,
+    defLoss: state.combatContext.defLossPreview,
     pending: true,
   };
   return state;
@@ -1899,8 +2338,8 @@ export function getContinents() {
 }
 
 export { ADJACENCY, TERRITORIES, CONTINENTS, getClassicCard, isClassicCardId };
-export { CARDS, getCard, isCombatCard, isHandPlayable } from '../data/cards.js';
+export { CARDS, getCard, isCombatCard, isHandPlayable, getSandboxKitIds } from '../data/cards.js';
 export { RELICS, RELIC_IDS } from '../data/relics.js';
-export { EVENTS } from '../data/events.js';
+export { EVENTS, EVENT_IDS } from '../data/events.js';
 export { MISSIONS } from '../data/missions.js';
-export { windowRemainingMs, STACK_WINDOW_MS, canEndPhaseNow, canStartCast } from './stack.js';
+export { windowRemainingMs, STACK_WINDOW_MS, canEndPhaseNow, canStartCast, canCastCombat } from './stack.js';

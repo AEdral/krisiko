@@ -8,6 +8,7 @@ import {
   MIN_PLAYERS,
 } from '../engine/game.js';
 import { runAiTurn, processStackPhase } from '../ai/ai.js';
+import { log, summarizeAction, summarizeState } from './logger.js';
 
 const ROOM_TTL_MS = 3 * 60 * 60 * 1000;
 const EMPTY_TTL_MS = 15 * 60 * 1000;
@@ -379,12 +380,33 @@ export function handleAction(roomId, clientId, action) {
     return { error: 'Azione non valida.' };
   }
   if (!isActionAllowed(room.state, seat.id, action)) {
+    log.warn('game', 'action denied', {
+      room: roomId,
+      player: seat.id,
+      action: summarizeAction(action),
+      state: summarizeState(room.state),
+    });
     return { error: 'Azione non permessa.' };
   }
+
+  const beforeLog = room.state.log?.length || 0;
+  log.info('game', `action ${action.type}`, {
+    room: roomId,
+    player: seat.id,
+    action: summarizeAction(action),
+    before: summarizeState(room.state),
+  });
 
   applyAction(room.state, normalizeClientAction(room.state, seat.id, action));
   room.lastActive = Date.now();
   if (room.state.phase === 'game_over') room.status = 'done';
+
+  const newLogs = (room.state.log || []).slice(beforeLog);
+  for (const entry of newLogs) {
+    log.info('gamelog', entry.message, { room: roomId, type: entry.type || null });
+  }
+  log.debug('game', 'state after', { room: roomId, state: summarizeState(room.state) });
+
   broadcastState(room);
   void pumpGame(room);
   return { ok: true };
