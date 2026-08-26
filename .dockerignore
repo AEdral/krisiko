@@ -5,3 +5,4 @@ node_modules
 !README.md
 docs
 src/js/smoke-test.js
+src/js/stack-online-test.js

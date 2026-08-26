@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server/index.js",
     "start:static": "npx --yes serve src",
-    "smoke": "node src/js/smoke-test.js"
+    "smoke": "node src/js/smoke-test.js",
+    "smoke:stack": "node src/js/stack-online-test.js"
   },
   "dependencies": {
     "ws": "^8.18.0"

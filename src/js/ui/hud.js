@@ -282,16 +282,15 @@ export function renderHud(els, state, ui, nowMs = Date.now()) {
 export function renderStackPanel(el, state, ui, nowMs = Date.now()) {
   if (!el) return;
   const me = localPlayer(state, ui);
-  const layout = el.closest('.layout');
-  if (state.vanillaMode || state.phase === 'setup' || state.phase === 'game_over') {
+  const stackIdle =
+    !state.responseWindow && !state.pendingCast && !state.combatContext && !(state.stack?.length > 0);
+  if (state.vanillaMode || state.phase === 'setup' || state.phase === 'game_over' || stackIdle) {
     el.classList.add('hidden');
-    layout?.classList.remove('has-stack');
     el.innerHTML = '';
     return;
   }
 
   el.classList.remove('hidden');
-  layout?.classList.add('has-stack');
 
   const stack = state.stack || [];
   const rem = state.responseWindow ? windowRemainingMs(state, nowMs) : 0;
@@ -396,7 +395,8 @@ function choiceSessionKey(state, me, ui) {
     !state.vanillaMode &&
     state.responseWindow &&
     !state.pendingCast &&
-    !(state.responseWindow.passedPlayerIds || []).includes(me.id)
+    !(state.responseWindow.passedPlayerIds || []).includes(me.id) &&
+    collectPlayableResponseCards(state, me).length > 0
   ) {
     const top = state.stack?.[state.stack.length - 1];
     return `rw:${state.responseWindow.kind}:${top?.cardId || ''}:${top?.id || ''}:${state.combatContext?.attLossPreview ?? ''}:${state.combatContext?.defLossPreview ?? ''}`;
@@ -599,16 +599,18 @@ export function renderChoiceOverlay(els, state, human, ui) {
 
   // —— Finestra risposta / combat (Instant + OK) ——
   // pendingChoice ha priorità: non sovrascrivere quel modal.
-  if (
+  const responseCards =
     !state.vanillaMode &&
     state.responseWindow &&
     !state.pendingCast &&
     !(state.pendingChoice && me.id === state.pendingChoice.actorId) &&
     !(state.responseWindow.passedPlayerIds || []).includes(me.id)
-  ) {
+      ? collectPlayableResponseCards(state, me)
+      : [];
+  if (responseCards.length > 0) {
     setDock(true);
     const kind = state.responseWindow.kind;
-    const playable = collectPlayableResponseCards(state, me);
+    const playable = responseCards;
     const rem = Math.ceil(windowRemainingMs(state, Date.now()) / 1000);
     const title =
       kind === 'combat'
@@ -617,12 +619,7 @@ export function renderChoiceOverlay(els, state, human, ui) {
           ? 'Rispondi allo stack'
           : 'Rispondi';
     titleEl.textContent = title;
-    if (subEl) {
-      subEl.textContent =
-        playable.length > 0
-          ? `Hai ${rem}s · clicca una carta o passa`
-          : `Hai ${rem}s · passa se non fai nulla`;
-    }
+    if (subEl) subEl.textContent = `Hai ${rem}s · clicca una carta o passa`;
     for (const entry of playable) {
       const meta = [entry.card.timing, entry.fromKit ? 'kit' : null].filter(Boolean).join(' · ');
       addOpt({

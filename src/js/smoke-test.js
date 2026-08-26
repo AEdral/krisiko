@@ -113,6 +113,22 @@ function smoke() {
   }
   const hands = s2.players.P1.hand.length + s2.players.P2.hand.length;
   console.log(`After ~80 turns, combined hand size=${hands}, discard=${s2.cardDiscard.length}`);
+
+  // Classico: nessuno stack. Gli attacchi si risolvono nello stesso tick, senza
+  // finestra di risposta (che in Classico nessuno chiuderebbe mai).
+  const sv = createGame({ seed: 5, aiCount: 1, vanillaMode: true });
+  for (const pid of sv.playerOrder) sv.players[pid].isHuman = false;
+  let gv = 0;
+  while (sv.phase === 'setup' && gv++ < 200) runAiTurn(sv, { maxSteps: 5 });
+  assert(sv.phase !== 'setup', 'classico: setup finito');
+  for (let i = 0; i < 30 && sv.phase !== 'game_over'; i++) runAiTurn(sv, { maxSteps: 300 });
+  assert(!sv.responseWindow, 'classico: nessuna finestra stack');
+  assert(!sv.combatContext, 'classico: nessun combattimento appeso');
+  assert(sv.stack.length === 0, 'classico: stack sempre vuoto');
+  const vanillaBattles = sv.log.filter((e) => /Battaglia|Conquista/.test(e.message)).length;
+  assert(vanillaBattles > 0, 'classico: le battaglie si risolvono davvero');
+  console.log(`Classico: battaglie risolte=${vanillaBattles}, round=${sv.round}, phase=${sv.phase}`);
+
   console.log('SMOKE OK');
 }
 

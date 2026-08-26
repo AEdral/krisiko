@@ -77,6 +77,7 @@ export function processStackPhase(state, opts = {}) {
 
   const humanCanRespond = state.playerOrder.some((id) => {
     if (!state.players[id].isHuman) return false;
+    if (state.responseWindow.passedPlayerIds?.includes(id)) return false;
     return getLegalActions(state, id).some((a) => a.type === 'CAST_START' || a.type === 'CAST_CONFIRM');
   });
   if (!humanCanRespond) {

@@ -52,6 +52,8 @@ Ogni lancio di **Instant** o **Combat** usa conferma obbligatoria:
 | Reset | Ogni `CAST_CONFIRM` che aggiunge allo stack → `deadline = now + 10s` |
 | Pausa | Durante `pendingCast` → timer congelato |
 | Scadenza | Auto-pass: nessuna nuova carta, si procede a risoluzione |
+| Apertura | **Solo se qualcuno può davvero lanciare** (carta giocabile in mano/kit). Altrimenti niente finestra: risoluzione immediata |
+| Chiusura anticipata | Quando **tutti quelli che potevano rispondere** hanno passato. Chi non ha carte giocabili non trattiene la finestra |
 | Autorità online | Server o host (timestamp assoluto nello state) |
 | RNG | **Indipendente** dal timer; deterministico su seed + sequenza azioni |
 
@@ -119,9 +121,11 @@ P1 continua il turno
    Snapshot salvato: { attDice, defDice, from, to, attackerId, defenderId }
 
 3. FINESTRA RISPOSTA (10s sync, reset ad ogni confirm)
+   Si apre SOLO se attaccante o difensore ha una Combat giocabile
+   (chi non perde truppe non può lanciare → spesso nessuna finestra)
    Attaccante + difensore: carte Combat (confirm)
-   Tutti i giocatori: Instant (confirm)
    pendingCast globale per Combat e Instant
+   Nessuna Combat giocabile → il combattimento si risolve nello stesso tick
 
 4. CHIUSURA FINESTRA
    Timer scaduto, pendingCast == null
@@ -223,11 +227,17 @@ while (stack.length > 0) {
 
 **`END_PHASE`:** consentito solo se stack vuoto, window null, no pendingInvasion, no pendingCast.
 
+**Finestra a vuoto:** una window non si apre (e se aperta si chiude subito) quando nessun
+giocatore vivo ha un `CAST_START` legale. Senza questa regola ogni attacco costa 10s di
+attesa a tutti e un «OK per me» inutile.
+
 ---
 
 ## 9. Modalità Classico
 
-- **Nessuno stack**
+- **Nessuno stack**: `resolveAttack()` risolve il combattimento nello stesso tick, senza
+  `responseWindow` né `combatContext` residuo (in Classico nessuno chiuderebbe la finestra:
+  `tickStack()` e lo stack clock dell'UI escono subito su `vanillaMode`)
 - Carte territorio tradizionali (pesca su conquista, scambio set)
 - Regole separate, motore isolato (`vanillaMode === true`)
 
@@ -237,12 +247,13 @@ while (stack.length > 0) {
 
 | Elemento | Posizione / comportamento |
 |----------|---------------------------|
-| Stack | **Pannello a sinistra** (desktop); mobile da definire |
+| Stack | **Pop-up in alto a destra** sopra la mappa (desktop e mobile). Compare solo quando c'è una window, un `pendingCast` o lo stack non è vuoto; non occupa una colonna del layout |
 | Timer | Countdown 10s sync visibile a tutti |
 | pendingCast | Banner "Nome sta lanciando…" + timer in pausa |
 | Combattimento | Animazione dadi **in pausa** durante la window |
 | Tipi carta | Distinzione visiva Action / Combat / Instant |
 | Priorità | **Nessun** highlight priorità |
+| Dock risposta | Mostrato solo a chi ha almeno una carta lanciabile in quella window |
 
 ---
 
