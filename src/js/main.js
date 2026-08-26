@@ -766,11 +766,25 @@ function maybeShowDice() {
 }
 
 let stackClock = null;
+let aiRetryTimer = null;
 
 function stopStackClock() {
+  if (aiRetryTimer) {
+    clearTimeout(aiRetryTimer);
+    aiRetryTimer = null;
+  }
   if (!stackClock) return;
   clearInterval(stackClock);
   stackClock = null;
+}
+
+/** L'IA è stata svegliata mentre l'UI era occupata: riprova appena si libera. */
+function scheduleAiRetry(delayMs = 200) {
+  if (aiRetryTimer) return;
+  aiRetryTimer = setTimeout(() => {
+    aiRetryTimer = null;
+    maybeRunAi();
+  }, delayMs);
 }
 
 function ensureStackClock() {
@@ -784,16 +798,17 @@ function ensureStackClock() {
     processStackPhase(state);
     refresh();
     if (hadCombat && !state.combatContext) {
+      // L'IA riparte DOPO l'animazione dadi: maybeShowDice() alza `busy`, e
+      // maybeRunAi() con busy=true esce senza riprogrammarsi — turno congelato.
       void (async () => {
         await maybeShowDice();
         ensureInvasionUi();
+        maybeRunAi();
       })();
-    } else {
-      ensureInvasionUi();
+      return;
     }
-    if (state.combatContext || hadCombat !== !!state.combatContext) {
-      maybeRunAi();
-    } else if (!state.players[state.currentPlayerId]?.isHuman) {
+    ensureInvasionUi();
+    if (state.combatContext || !state.players[state.currentPlayerId]?.isHuman) {
       maybeRunAi();
     }
   }, 250);
@@ -1548,6 +1563,7 @@ function maybeRunAi() {
   if (state.responseWindow) {
     const humanCanRespond = state.playerOrder.some((id) => {
       if (!state.players[id].isHuman) return false;
+      if (state.responseWindow.passedPlayerIds?.includes(id)) return false;
       return getLegalActions(state, id).some((a) => a.type === 'CAST_START' || a.type === 'CAST_CONFIRM');
     });
     if (humanCanRespond) {
@@ -1561,7 +1577,10 @@ function maybeRunAi() {
     refresh();
     return;
   }
-  if (busy) return;
+  if (busy) {
+    scheduleAiRetry();
+    return;
+  }
 
   els.mapHint.textContent = state.phase === 'setup'
     ? `Schieramento ${state.players[state.currentPlayerId].name}…`

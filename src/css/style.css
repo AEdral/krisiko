@@ -100,13 +100,6 @@ html, body {
     "tray";
 }
 
-.layout.has-stack {
-  grid-template-columns: 176px 1fr;
-  grid-template-areas:
-    "stack map"
-    "tray tray";
-}
-
 .hud-stack {
   display: contents;
 }
@@ -165,18 +158,27 @@ html, body {
     linear-gradient(180deg, #0f2c38, #0a1e28);
 }
 
+/* Pop-up sopra la mappa: compare solo quando lo stack ha qualcosa, e non
+   ridisegna il layout (come colonna del grid faceva saltare la mappa). */
 .stack-panel {
-  grid-area: stack;
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  width: min(200px, calc(100% - 1.1rem));
+  max-height: min(58%, calc(100% - var(--tray-h) - 1.1rem));
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
   min-width: 0;
   min-height: 0;
-  padding: 0.65rem 0.55rem 0.55rem;
-  background: rgba(6, 14, 18, 0.94);
-  border-right: 1px solid var(--line);
+  padding: 0.6rem 0.6rem 0.55rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
   overflow: hidden;
-  z-index: 4;
+  z-index: 12;
 }
 .stack-panel.hidden {
   display: none;
@@ -2485,35 +2487,12 @@ button.die:hover {
       "hud";
   }
 
-  .layout.has-stack {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr) auto;
-    grid-template-areas:
-      "stack"
-      "map"
-      "hud";
-  }
-
   .stack-panel {
-    max-height: none;
-    border-right: none;
-    border-bottom: 1px solid var(--line);
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    padding: 0.4rem 0.5rem;
-  }
-  .stack-panel h2 {
-    width: 100%;
-  }
-  .stack-entries {
-    flex-direction: row;
-    flex-wrap: wrap;
-    overflow-x: auto;
-    max-height: 72px;
-  }
-  .stack-entry {
-    min-width: 110px;
+    top: 0.4rem;
+    right: 0.4rem;
+    width: min(210px, calc(100% - 0.8rem));
+    max-height: 42%;
+    padding: 0.5rem 0.55rem;
   }
   .stack-combat {
     width: 100%;

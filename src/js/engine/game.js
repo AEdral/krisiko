@@ -38,7 +38,6 @@ import {
   canCastCombat,
   isCounterCard,
   anyOpponentCanCounterTop,
-  anyoneCanCastCombat,
 } from './stack.js';
 import {
   getChoiceLegalActions,
@@ -1651,8 +1650,9 @@ function passStack(state, action) {
   state.responseWindow.passedPlayerIds = passed;
   log(state, `${playerName(state, pid)} passa.`);
   const alive = getAlivePlayerIds(state);
-  if (alive.every((id) => passed.includes(id))) {
-    log(state, 'Tutti passano — finestra chiusa.');
+  // Chi non ha nulla di giocabile non trattiene la finestra: conta come passato.
+  if (alive.every((id) => passed.includes(id) || !playerCanCastInWindow(state, id))) {
+    log(state, 'Nessuna risposta in sospeso — finestra chiusa.');
     return closeResponseWindow(state, stackNow(action));
   }
   return state;
@@ -1699,7 +1699,7 @@ function closeResponseWindow(state, nowMs) {
   if (kind === 'combat_counter') {
     refreshCombatLossPreview(state);
     openResponseWindow(state, 'combat', nowMs);
-    if (!anyoneCanCastCombat(state)) {
+    if (!anyPlayerCanCastInWindow(state)) {
       log(state, 'Nessuna altra carta combat giocabile — risoluzione.');
       state.responseWindow = null;
       finishCombatFromContext(state);
@@ -1760,7 +1760,7 @@ function pushCastToStack(state, actor, card, handIndex, targets, nowMs, opts = {
       resetWindowDeadline(state, nowMs);
       resumeResponseWindow(state, nowMs);
     }
-    if (!anyoneCanCastCombat(state)) {
+    if (!anyPlayerCanCastInWindow(state)) {
       log(state, 'Nessuna altra carta combat giocabile — risoluzione.');
       state.responseWindow = null;
       finishCombatFromContext(state);
@@ -1784,7 +1784,7 @@ function pushCastToStack(state, actor, card, handIndex, targets, nowMs, opts = {
     if (kind === 'combat_counter' && state.combatContext) {
       refreshCombatLossPreview(state);
       openResponseWindow(state, 'combat', nowMs);
-      if (!anyoneCanCastCombat(state)) {
+      if (!anyPlayerCanCastInWindow(state)) {
         state.responseWindow = null;
         finishCombatFromContext(state);
       }
@@ -2074,6 +2074,22 @@ function getStackActions(state, actorId) {
   return actions;
 }
 
+/**
+ * True se il giocatore ha un CAST_START legale nella finestra aperta.
+ * Più stretto di canCastCombat()/canRespondInstant(): guarda anche la mano
+ * (e il kit sandbox), non solo il diritto teorico di rispondere.
+ */
+function playerCanCastInWindow(state, pid) {
+  if (state.vanillaMode || !state.responseWindow || state.pendingCast) return false;
+  return getStackActions(state, pid).some((a) => a.type === 'CAST_START');
+}
+
+/** True se almeno un giocatore vivo può ancora lanciare nella finestra aperta. */
+function anyPlayerCanCastInWindow(state) {
+  if (state.vanillaMode || !state.responseWindow || state.pendingCast) return false;
+  return getAlivePlayerIds(state).some((pid) => playerCanCastInWindow(state, pid));
+}
+
 function resolveBastionChoice(state, action) {
   if (!state.pendingBastion) return state;
   const pending = state.pendingBastion;
@@ -2195,6 +2211,12 @@ function resolveAttack(state, action) {
     pendingCombatCards: [],
   };
 
+  // Classico: nessuno stack, il combattimento si risolve nello stesso tick.
+  if (state.vanillaMode) {
+    finishCombatFromContext(state);
+    return state;
+  }
+
   openResponseWindow(state, 'combat', nowMs);
   refreshCombatLossPreview(state);
   log(
@@ -2210,6 +2232,13 @@ function resolveAttack(state, action) {
     defLoss: state.combatContext.defLossPreview,
     pending: true,
   };
+
+  // Nessuno ha carte giocabili: niente finestra da 10s, si risolve subito.
+  if (!anyPlayerCanCastInWindow(state)) {
+    log(state, 'Nessuna carta giocabile — combattimento risolto subito.');
+    state.responseWindow = null;
+    finishCombatFromContext(state);
+  }
   return state;
 }
 

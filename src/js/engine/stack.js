@@ -157,12 +157,6 @@ export function canCastCombat(state, playerId) {
   return true;
 }
 
-export function anyoneCanCastCombat(state) {
-  const ctx = state?.combatContext;
-  if (!ctx) return false;
-  return canCastCombat(state, ctx.attackerId) || canCastCombat(state, ctx.defenderId);
-}
-
 export function canRespondInstant(state, playerId) {
   if (state.vanillaMode || !state.responseWindow) return false;
   // In combat “aperto” non si castano instant: Negare solo nella sottofinestra counter.
@@ -179,6 +173,8 @@ export function canRespondInstant(state, playerId) {
 export function canStartCast(state, playerId, card) {
   if (state.vanillaMode || !card) return false;
   if (state.pendingCast) return false;
+  // Chi ha già passato è fuori dalla finestra finché un nuovo lancio non la resetta.
+  if (state.responseWindow?.passedPlayerIds?.includes(playerId)) return false;
 
   if (card.timing === 'action') {
     if (playerId !== state.currentPlayerId) return false;
