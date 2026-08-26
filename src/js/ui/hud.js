@@ -13,6 +13,7 @@ import {
   getClassicCard,
   isClassicCardId,
   canEndPhaseNow,
+  mustAttackBeforeEndPhase,
   windowRemainingMs,
   canStartCast,
   TERRITORIES,
@@ -1172,16 +1173,22 @@ export function renderActions(el, state, ui) {
   const end = document.createElement('button');
   end.type = 'button';
   end.className = 'btn';
+  // Caos obbliga ad attaccare: dirlo sul pulsante invece di lasciarlo attivo e inerte.
+  const chaosBlocks = mustAttackBeforeEndPhase(state, state.currentPlayerId);
   end.textContent =
     state.phase === 'reinforce'
       ? state.reinforcementsRemaining > 0
         ? `Piazza ancora ${state.reinforcementsRemaining}`
         : 'Fine rinforzi'
       : state.phase === 'attack'
-        ? 'Fine attacchi'
+        ? chaosBlocks
+          ? 'Caos: devi attaccare'
+          : 'Fine attacchi'
         : 'Fine turno';
   end.disabled =
-    (state.phase === 'reinforce' && state.reinforcementsRemaining > 0) || !canEndPhaseNow(state);
+    (state.phase === 'reinforce' && state.reinforcementsRemaining > 0) ||
+    chaosBlocks ||
+    !canEndPhaseNow(state);
   end.addEventListener('click', () => ui.onEndPhase?.());
   el.appendChild(end);
 }

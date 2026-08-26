@@ -1,4 +1,4 @@
-import { createGame, applyAction, getCard, TERRITORIES, areAdjacent, canFortifyBetween, PLAYER_SLOTS, MAX_PLAYERS, getLegalActions, canEndPhaseNow } from './engine/game.js';
+import { createGame, applyAction, getCard, TERRITORIES, areAdjacent, canFortifyBetween, PLAYER_SLOTS, MAX_PLAYERS, getLegalActions, canEndPhaseNow, mustAttackBeforeEndPhase } from './engine/game.js';
 import { isValidClassicSet } from './data/classic-cards.js';
 import { runAiTurn, processStackPhase } from './ai/ai.js';
 import { processChoiceDraft } from './engine/game.js';
@@ -1511,6 +1511,7 @@ ui.onTradeClassic = () => {
 
 ui.onEndPhase = () => {
   if (!isMyTurn() || !canEndPhaseNow(state)) return;
+  if (mustAttackBeforeEndPhase(state, localId())) return;
   dispatch({ type: 'END_PHASE' }, { ai: true });
   ui.selectedId = null;
   ui.selectedCardIndex = null;

@@ -333,6 +333,35 @@ function isTerritoryIsolated(state, territoryId) {
   return !!state.isolatedTerritories?.[territoryId];
 }
 
+/**
+ * Un attacco è davvero dichiarabile? Stesse condizioni con cui getLegalActions()
+ * enumera ATTACK e con cui resolveAttack() accetta: ≥2 armate, non isolato,
+ * confinante con un nemico. Un solo posto, così UI, motore e IA non divergono.
+ */
+function hasLegalAttack(state, playerId = state.currentPlayerId) {
+  if (state.responseWindow || state.combatContext || state.pendingInvasion) return false;
+  for (const from of getPlayerTerritories(state, playerId)) {
+    if (state.territories[from].armies < 2) continue;
+    if (isTerritoryIsolated(state, from)) continue;
+    for (const to of ADJACENCY[from]) {
+      if (state.territories[to].owner !== playerId) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Caos: «se puoi attaccare, devi attaccare». Blocca END_PHASE solo finché un
+ * attacco è davvero possibile — altrimenti la fase non si chiuderebbe mai.
+ */
+export function mustAttackBeforeEndPhase(state, playerId = state.currentPlayerId) {
+  if (state.phase !== 'attack' || state.mustAttackSatisfied) return false;
+  const chaos = findActiveEventByEffect(state, 'must_attack_once');
+  if (!chaos) return false;
+  if (chaos.tag === 'harm' && isImmuneToHarm(state, playerId)) return false;
+  return hasLegalAttack(state, playerId);
+}
+
 function pickOpponent(state, fromPlayerId, preferredId) {
   if (preferredId && preferredId !== fromPlayerId && state.players[preferredId]) return preferredId;
   const alive = getAlivePlayerIds(state).filter((id) => id !== fromPlayerId);
@@ -1024,7 +1053,9 @@ export function getLegalActions(state, actingPlayerId = null) {
     }
 
     if (state.phase === 'attack') {
-      if (canEndPhaseNow(state)) actions.push({ type: 'END_PHASE' });
+      if (canEndPhaseNow(state) && !mustAttackBeforeEndPhase(state, turnPid)) {
+        actions.push({ type: 'END_PHASE' });
+      }
       if (!state.responseWindow && !state.combatContext) {
         for (const from of getPlayerTerritories(state, turnPid)) {
           if (state.territories[from].armies < 2) continue;
@@ -1132,6 +1163,19 @@ export function isActionAllowed(state, playerId, action) {
     case 'RECYCLE_CARD':
       return legal.some(
         (a) => a.type === action.type && a.handIndex === action.handIndex,
+      );
+    case 'RESOLVE_ARCANA':
+    case 'RESOLVE_CHOICE':
+      // Il ramo default guarda solo il tipo: un payload stantio (step della scelta
+      // cambiato tra render e click) passerebbe il controllo e poi non farebbe nulla.
+      return legal.some(
+        (a) =>
+          a.type === action.type &&
+          (a.cardId === undefined || a.cardId === action.cardId) &&
+          (a.relicId === undefined || a.relicId === action.relicId) &&
+          (a.targetPlayerId === undefined || a.targetPlayerId === action.targetPlayerId) &&
+          (a.scryAction === undefined || a.scryAction === action.scryAction) &&
+          (a.confirm === undefined || a.confirm === !!action.confirm),
       );
     case 'SANDBOX_TOGGLE_RELIC':
       return !!state.sandboxMode && !!action.relicId && RELIC_IDS.includes(action.relicId);
@@ -1313,28 +1357,9 @@ function endPhase(state) {
   }
 
   if (state.phase === 'attack') {
-    const chaos = findActiveEventByEffect(state, 'must_attack_once');
-    if (chaos) {
-      const immune = chaos.tag === 'harm' && isImmuneToHarm(state, pid);
-      if (!immune && !state.mustAttackSatisfied) {
-        const canAttack = getLegalActions({ ...state, phase: 'attack' }).some((a) => a.type === 'ATTACK');
-        // Recompute can-attack without END_PHASE
-        let hasAttack = false;
-        for (const from of getPlayerTerritories(state, pid)) {
-          if (state.territories[from].armies < 2) continue;
-          for (const to of ADJACENCY[from]) {
-            if (state.territories[to].owner !== pid) {
-              hasAttack = true;
-              break;
-            }
-          }
-          if (hasAttack) break;
-        }
-        if (hasAttack) {
-          log(state, 'Evento Caos: devi attaccare almeno una volta.');
-          return state;
-        }
-      }
+    if (mustAttackBeforeEndPhase(state, pid)) {
+      log(state, 'Evento Caos: devi attaccare almeno una volta.');
+      return state;
     }
 
     if (state.conqueredThisTurn && (!state.drawEveryTurn || state.vanillaMode)) {
