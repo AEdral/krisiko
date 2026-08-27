@@ -3,7 +3,10 @@
  * Run: node --experimental-vm-modules smoke-test.js
  * From src/js: node smoke-test.js
  */
-import { createGame, getPlayerTerritories, serializeState, hydrateState, viewForPlayer } from './engine/game.js';
+import {
+  createGame, getPlayerTerritories, serializeState, hydrateState, viewForPlayer,
+  applyAction, getLegalActions,
+} from './engine/game.js';
 import { runAiTurn } from './ai/ai.js';
 
 function assert(cond, msg) {
@@ -128,6 +131,42 @@ function smoke() {
   const vanillaBattles = sv.log.filter((e) => /Battaglia|Conquista/.test(e.message)).length;
   assert(vanillaBattles > 0, 'classico: le battaglie si risolvono davvero');
   console.log(`Classico: battaglie risolte=${vanillaBattles}, round=${sv.round}, phase=${sv.phase}`);
+
+  // Caos («se puoi attaccare, devi attaccare») deve restare coerente con ciò che
+  // il motore accetta: END_PHASE offerto solo quando verrebbe davvero accettato,
+  // e mai un turno che non si può chiudere.
+  const chaosSetup = (isolateAll) => {
+    const c = createGame({ seed: 4, aiCount: 1 });
+    for (const pid of c.playerOrder) c.players[pid].setupRemaining = 0;
+    c.phase = 'attack';
+    c.currentPlayerId = 'P1';
+    c.reinforcementsRemaining = 0;
+    c.activeEventIds = ['chaos'];
+    c.mustAttackSatisfied = false;
+    for (const from of getPlayerTerritories(c, 'P1')) {
+      if (c.territories[from].armies < 2) c.territories[from].armies = 3;
+      const border = c.adjacency[from].some((to) => c.territories[to].owner !== 'P1');
+      if (isolateAll && border) c.isolatedTerritories[from] = { untilPlayerId: 'P2' };
+    }
+    return c;
+  };
+
+  // (a) attacco possibile: END_PHASE non è legale e il motore lo rifiuta
+  const chaosOpen = chaosSetup(false);
+  const openLegal = getLegalActions(chaosOpen, 'P1');
+  assert(openLegal.some((a) => a.type === 'ATTACK'), 'caos: attacchi disponibili');
+  assert(!openLegal.some((a) => a.type === 'END_PHASE'), 'caos: END_PHASE non offerto se puoi attaccare');
+  applyAction(chaosOpen, { type: 'END_PHASE' });
+  assert(chaosOpen.phase === 'attack', 'caos: END_PHASE rifiutato se puoi attaccare');
+
+  // (b) nessun attacco possibile (tutti i confini isolati): niente soft-lock
+  const chaosLocked = chaosSetup(true);
+  const lockedLegal = getLegalActions(chaosLocked, 'P1');
+  assert(!lockedLegal.some((a) => a.type === 'ATTACK'), 'caos+isolamento: nessun attacco legale');
+  assert(lockedLegal.some((a) => a.type === 'END_PHASE'), 'caos+isolamento: END_PHASE offerto');
+  applyAction(chaosLocked, { type: 'END_PHASE' });
+  assert(chaosLocked.phase === 'fortify', 'caos+isolamento: la fase si chiude, niente soft-lock');
+  console.log('Caos: coerenza END_PHASE/attacco verificata (con e senza isolamento)');
 
   console.log('SMOKE OK');
 }

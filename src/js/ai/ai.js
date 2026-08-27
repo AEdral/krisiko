@@ -5,6 +5,7 @@ import {
   getCard,
   isCombatCard,
   getLegalActions,
+  mustAttackBeforeEndPhase,
   STACK_WINDOW_MS,
   processChoiceDraft,
 } from '../engine/game.js';
@@ -289,24 +290,18 @@ function aiReinforce(state) {
 
 function aiAttack(state) {
   const pid = state.currentPlayerId;
-  const f = fronts(state, pid);
-  const must =
-    ((state.activeEventIds || []).includes('chaos') || state.activeEventId === 'chaos') &&
-    !state.mustAttackSatisfied;
+  // Candidati = attacchi che il motore accetta davvero (esclude i territori
+  // isolati): altrimenti l'IA riprova all'infinito una mossa che viene rifiutata.
+  const candidates = getLegalActions(state, pid).filter((a) => a.type === 'ATTACK');
+  const must = mustAttackBeforeEndPhase(state, pid);
 
   let best = null;
-  for (const front of f) {
-    if (front.armies < 2) continue;
-    for (const enemyId of front.enemies) {
-      const def = state.territories[enemyId].armies;
-      const score = front.armies - def;
-      const acceptable = score >= 1 || (score >= 0 && front.armies >= 4) || must;
-      if (acceptable) {
-        if (!best || score > best.score) {
-          best = { from: front.tid, to: enemyId, score };
-        }
-      }
-    }
+  for (const a of candidates) {
+    const att = state.territories[a.from].armies;
+    const score = att - state.territories[a.to].armies;
+    const acceptable = score >= 1 || (score >= 0 && att >= 4) || must;
+    if (!acceptable) continue;
+    if (!best || score > best.score) best = { ...a, score };
   }
   if (!best) return false;
 
@@ -314,7 +309,7 @@ function aiAttack(state) {
     type: 'ATTACK',
     from: best.from,
     to: best.to,
-    attackDice: Math.min(3, state.territories[best.from].armies - 1),
+    attackDice: best.attackDice ?? Math.min(3, state.territories[best.from].armies - 1),
   });
   return true;
 }
