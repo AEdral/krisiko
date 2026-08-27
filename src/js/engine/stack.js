@@ -159,8 +159,9 @@ export function canCastCombat(state, playerId) {
 
 export function canRespondInstant(state, playerId) {
   if (state.vanillaMode || !state.responseWindow) return false;
-  // In combat “aperto” non si castano instant: Negare solo nella sottofinestra counter.
-  if (state.responseWindow.kind === 'combat') return false;
+  // Anche nella finestra combat: è lì che si gioca Isolamento in risposta a un
+  // attacco dichiarato. I counter restano fuori da soli, perché canCounterTop()
+  // richiede una carta avversaria in cima e in quella finestra lo stack è vuoto.
   const top = state.stack?.[state.stack.length - 1];
   if (top && top.playerId === playerId) return false;
   const turn = state.currentPlayerId;
@@ -190,6 +191,9 @@ export function canStartCast(state, playerId, card) {
   if (card.timing === 'instant') {
     if (!state.responseWindow) return false;
     if (!canRespondInstant(state, playerId)) return false;
+    // Isolamento bersaglia il territorio attaccante: senza combattimento in
+    // corso non ha bersaglio, e l'UI in finestra non ne può chiedere uno.
+    if (card.effect?.type === 'isolation' && !state.combatContext) return false;
     if (isCounterCard(card) && !canCounterTop(state, playerId, card)) return false;
     // Instant non-counter (es. Isolamento) non in combat_counter.
     if (state.responseWindow.kind === 'combat_counter' && !isCounterCard(card)) return false;

@@ -351,6 +351,20 @@ function hasLegalAttack(state, playerId = state.currentPlayerId) {
 }
 
 /**
+ * Quante armate si possono spostare da questo territorio adesso. 0 se lo
+ * spostamento è già stato usato; 1 se resta solo quello extra da reliquia.
+ * Stessa regola applicata da fortify(): un solo posto per motore, UI e rete.
+ */
+export function maxFortifyArmies(state, from) {
+  const t = state.territories[from];
+  if (!t) return 0;
+  if (isTerritoryIsolated(state, from)) return 0;
+  const isExtra = state.fortifyUsed && state.extraFortifyRemaining > 0;
+  if (state.fortifyUsed && !isExtra) return 0;
+  return Math.max(0, Math.min(isExtra ? 1 : Infinity, t.armies - 1));
+}
+
+/**
  * Caos: «se puoi attaccare, devi attaccare». Blocca END_PHASE solo finché un
  * attacco è davvero possibile — altrimenti la fase non si chiuderebbe mai.
  */
@@ -1076,19 +1090,16 @@ export function getLegalActions(state, actingPlayerId = null) {
 
     if (state.phase === 'fortify') {
       if (canEndPhaseNow(state)) actions.push({ type: 'END_PHASE' });
-      const canMain = !state.fortifyUsed;
-      const canExtra = state.fortifyUsed && state.extraFortifyRemaining > 0;
-      if (canMain || canExtra) {
-        const maxMove = canExtra ? 1 : 999;
-        for (const from of getPlayerTerritories(state, turnPid)) {
-          if (state.territories[from].armies < 2) continue;
-          for (const to of getPlayerTerritories(state, turnPid)) {
-            if (from === to) continue;
-            if (!canFortifyBetween(state, from, to)) continue;
-            const max = Math.min(maxMove, state.territories[from].armies - 1);
-            for (let n = 1; n <= max && n <= 5; n++) {
-              actions.push({ type: 'FORTIFY', from, to, armies: n });
-            }
+      for (const from of getPlayerTerritories(state, turnPid)) {
+        const max = maxFortifyArmies(state, from);
+        if (max < 1) continue;
+        for (const to of getPlayerTerritories(state, turnPid)) {
+          if (from === to) continue;
+          if (!canFortifyBetween(state, from, to)) continue;
+          // Solo i primi valori: la lista serve all'IA, non è la whitelist di
+          // validazione — quella è maxFortifyArmies() in isActionAllowed().
+          for (let n = 1; n <= max && n <= 5; n++) {
+            actions.push({ type: 'FORTIFY', from, to, armies: n });
           }
         }
       }
@@ -1141,14 +1152,19 @@ export function isActionAllowed(state, playerId, action) {
       return legal.some(
         (a) => a.type === 'ATTACK' && a.from === action.from && a.to === action.to,
       );
-    case 'FORTIFY':
-      return legal.some(
-        (a) =>
-          a.type === 'FORTIFY' &&
-          a.from === action.from &&
-          a.to === action.to &&
-          (action.armies == null || a.armies === action.armies),
+    case 'FORTIFY': {
+      // getLegalActions enumera `armies` solo fino a 5 per non esplodere: usarlo
+      // come whitelist faceva rifiutare online ogni spostamento più grande.
+      if (!legal.some((a) => a.type === 'FORTIFY' && a.from === action.from && a.to === action.to)) {
+        return false;
+      }
+      if (action.armies == null) return true;
+      return (
+        Number.isInteger(action.armies) &&
+        action.armies >= 1 &&
+        action.armies <= maxFortifyArmies(state, action.from)
       );
+    }
     case 'PLACE_REINFORCEMENT':
       return legal.some(
         (a) => a.type === 'PLACE_REINFORCEMENT' && a.territoryId === action.territoryId,
@@ -1801,6 +1817,21 @@ function pushCastToStack(state, actor, card, handIndex, targets, nowMs, opts = {
     return true;
   }
 
+  // Instant nella finestra combat (Isolamento): si risolve subito e il
+  // combattimento prosegue. Senza questo ramo la finestra resterebbe in pausa
+  // dal castStart e la carta ferma sullo stack: partita bloccata.
+  if (state.responseWindow?.kind === 'combat') {
+    runStackResolution(state);
+    refreshCombatLossPreview(state);
+    resetWindowDeadline(state, nowMs);
+    resumeResponseWindow(state, nowMs);
+    if (!anyPlayerCanCastInWindow(state)) {
+      state.responseWindow = null;
+      finishCombatFromContext(state);
+    }
+    return true;
+  }
+
   // Nessun counter possibile → risolvi subito (niente attesa 10s).
   if (state.responseWindow?.kind === 'action_response' || state.responseWindow?.kind === 'combat_counter') {
     const kind = state.responseWindow.kind;
@@ -1839,6 +1870,12 @@ function castStart(state, action) {
     riderTerritoryId: action.riderTerritoryId,
     targetPlayerId: action.targetPlayerId,
   };
+
+  // Isolamento in risposta a un attacco: il bersaglio è il territorio
+  // attaccante, così basta un click dal pannello risposta.
+  if (card.timing === 'instant' && card.effect?.type === 'isolation' && !targets.territoryId) {
+    targets.territoryId = state.combatContext?.from ?? null;
+  }
 
   if (card.timing === 'action') {
     pushCastToStack(state, actor, card, handIndex, targets, nowMs, { fromKit });
