@@ -1,4 +1,4 @@
-import { createGame, applyAction, getCard, TERRITORIES, areAdjacent, canFortifyBetween, PLAYER_SLOTS, MAX_PLAYERS, getLegalActions, canEndPhaseNow, mustAttackBeforeEndPhase } from './engine/game.js';
+import { createGame, applyAction, getCard, TERRITORIES, areAdjacent, canFortifyBetween, PLAYER_SLOTS, MAX_PLAYERS, getLegalActions, canEndPhaseNow, mustAttackBeforeEndPhase, maxFortifyArmies } from './engine/game.js';
 import { isValidClassicSet } from './data/classic-cards.js';
 import { runAiTurn, processStackPhase } from './ai/ai.js';
 import { processChoiceDraft } from './engine/game.js';
@@ -815,7 +815,9 @@ function ensureStackClock() {
 }
 
 function openFortifyModal(from, to) {
-  const max = state.territories[from].armies - 1;
+  // Limite reale (spostamento già usato, extra da reliquia, isolamento), non
+  // solo le armate presenti: il cursore non deve proporre mosse rifiutate.
+  const max = maxFortifyArmies(state, from);
   if (max < 1) return;
   moveModalMode = 'fortify';
   pendingFortify = { from, to };
@@ -1312,6 +1314,9 @@ ui.onCardClick = (index, card) => {
   }
 
   if (state.responseWindow || state.combatContext || state.pendingCast) return;
+  // Gli instant si giocano solo in risposta: fuori finestra non aprire una
+  // modalità bersaglio che poi non porta a nulla (era il caso di Isolamento).
+  if (card.timing === 'instant') return;
 
   ui.selectedCardIndex = index;
   ui.selectedKitIndex = null;

@@ -2,7 +2,10 @@
  * Online stack sync — headless tests.
  * Run from src/js: node stack-online-test.js
  */
-import { createGame, applyAction, isActionAllowed, getCard, CARDS } from './engine/game.js';
+import {
+  createGame, applyAction, isActionAllowed, getCard, CARDS,
+  getLegalActions, canFortifyBetween, maxFortifyArmies,
+} from './engine/game.js';
 import { runAiTurn } from './ai/ai.js';
 import {
   createRoom,
@@ -299,7 +302,150 @@ function testAiTurnResumesAfterCombatWindow() {
   );
 }
 
+/** Partita pronta alla fase indicata, con P1 e P2 umani. */
+function readyGame(phase, seed = 7) {
+  const state = createGame({
+    seed,
+    seats: [
+      { name: 'A', isHuman: true },
+      { name: 'B', isHuman: true },
+    ],
+  });
+  for (const pid of state.playerOrder) state.players[pid].setupRemaining = 0;
+  state.phase = phase;
+  state.currentPlayerId = 'P1';
+  state.reinforcementsRemaining = 0;
+  return state;
+}
+
+/**
+ * getLegalActions enumera FORTIFY solo fino a 5 armate (la lista serve all'IA).
+ * Usarla come whitelist faceva rifiutare online ogni spostamento più grande,
+ * mentre il cursore dell'UI ne offre fino ad "armate − 1".
+ */
+function testFortifyOltreCinque() {
+  const state = readyGame('fortify');
+  const owned = getPlayerTerritories(state, 'P1');
+  let from = null;
+  let to = null;
+  for (const a of owned) {
+    for (const b of owned) {
+      if (a !== b && canFortifyBetween(state, a, b)) { from = a; to = b; break; }
+    }
+    if (from) break;
+  }
+  assert(from && to, 'coppia di territori collegati');
+  state.territories[from].armies = 14;
+
+  const offerti = getLegalActions(state, 'P1')
+    .filter((a) => a.type === 'FORTIFY' && a.from === from && a.to === to)
+    .map((a) => a.armies);
+  assert(offerti.length && Math.max(...offerti) === 5, 'la lista si ferma a 5 (enumerazione)');
+  assert(maxFortifyArmies(state, from) === 13, 'il limite vero è armate − 1');
+
+  assert(isActionAllowed(state, 'P1', { type: 'FORTIFY', from, to, armies: 5 }), 'spostamento piccolo ok');
+  assert(isActionAllowed(state, 'P1', { type: 'FORTIFY', from, to, armies: 13 }), 'spostamento grande ok');
+  assert(!isActionAllowed(state, 'P1', { type: 'FORTIFY', from, to, armies: 14 }), 'oltre il limite rifiutato');
+  assert(!isActionAllowed(state, 'P1', { type: 'FORTIFY', from, to, armies: 0 }), 'zero rifiutato');
+
+  applyAction(state, { type: 'FORTIFY', from, to, armies: 8 });
+  assert(state.territories[from].armies === 6, 'le 8 armate si spostano');
+  assert(
+    !isActionAllowed(state, 'P1', { type: 'FORTIFY', from, to, armies: 1 }),
+    'niente secondo spostamento senza reliquia extra',
+  );
+
+  // Un territorio isolato non può spostare: né offerto né accettato.
+  const s2 = readyGame('fortify');
+  s2.territories[from].armies = 6;
+  s2.isolatedTerritories[from] = { untilPlayerId: 'P2' };
+  assert(maxFortifyArmies(s2, from) === 0, 'isolato: limite 0');
+  assert(
+    !getLegalActions(s2, 'P1').some((a) => a.type === 'FORTIFY' && a.from === from),
+    'isolato: nessuno spostamento offerto',
+  );
+  assert(!isActionAllowed(s2, 'P1', { type: 'FORTIFY', from, to, armies: 1 }), 'isolato: rifiutato');
+}
+
+/**
+ * Isolamento è un instant: si gioca in risposta a un attacco dichiarato contro
+ * di te e bersaglia il territorio attaccante. Prima non era giocabile in nessun
+ * momento — castStart rifiuta gli instant fuori finestra, e la finestra combat
+ * escludeva gli instant.
+ */
+function testIsolamentoInRispostaAllAttacco() {
+  const state = readyGame('attack');
+  state.currentPlayerId = 'P2';
+  state.players.P1.hand = [giveCardId('isolation')];
+  state.players.P2.hand = [];
+
+  const from = getPlayerTerritories(state, 'P2').find((t) =>
+    state.adjacency[t].some((x) => state.territories[x].owner === 'P1'),
+  );
+  assert(from, 'P2 ha un fronte');
+  state.territories[from].armies = 6;
+  const to = state.adjacency[from].find((x) => state.territories[x].owner === 'P1');
+
+  applyAction(state, { type: 'ATTACK', from, to, attackDice: 3, nowMs: 1000 });
+  assert(state.responseWindow?.kind === 'combat', 'finestra combat aperta per la risposta');
+
+  const cast = getLegalActions(state, 'P1').find((a) => a.type === 'CAST_START');
+  assert(cast, 'il difensore può lanciare Isolamento');
+
+  applyAction(state, { ...cast, playerId: 'P1', nowMs: 1000 });
+  applyAction(state, { type: 'CAST_CONFIRM', playerId: 'P1', nowMs: 1000 });
+  assert(state.isolatedTerritories[from], 'bersaglio implicito: il territorio attaccante');
+  assert(!state.pendingCast, 'nessun cast in sospeso');
+
+  let guard = 0;
+  let now = 1000;
+  while ((state.responseWindow || state.combatContext) && guard++ < 30) {
+    now += 20_000;
+    applyAction(state, { type: 'TICK_STACK', nowMs: now });
+  }
+  assert(guard < 30, 'la finestra si chiude (niente pausa infinita dopo il cast)');
+  assert(
+    !getLegalActions(state, 'P2').some((a) => a.type === 'ATTACK' && a.from === from),
+    'il territorio isolato non può più attaccare',
+  );
+
+  // Senza combattimento in corso Isolamento non ha bersaglio: non è giocabile.
+  const idle = readyGame('attack');
+  idle.players.P1.hand = [giveCardId('isolation')];
+  assert(
+    !getLegalActions(idle, 'P1').some((a) => a.type === 'CAST_START'),
+    'Isolamento non giocabile fuori da un combattimento',
+  );
+}
+
+/** Nella finestra combat aperta lo stack è vuoto: Negare/Sciacallo restano fuori. */
+function testCounterFuoriDallaFinestraCombat() {
+  const state = readyGame('attack');
+  state.currentPlayerId = 'P2';
+  state.players.P1.hand = [giveCardId('negate'), giveCardId('jackal')];
+  state.players.P2.hand = [];
+  const from = getPlayerTerritories(state, 'P2').find((t) =>
+    state.adjacency[t].some((x) => state.territories[x].owner === 'P1'),
+  );
+  state.territories[from].armies = 6;
+  const to = state.adjacency[from].find((x) => state.territories[x].owner === 'P1');
+  applyAction(state, { type: 'ATTACK', from, to, attackDice: 3, nowMs: 1000 });
+  assert(
+    !getLegalActions(state, 'P1').some((a) => a.type === 'CAST_START'),
+    'nessun counter nella finestra combat aperta',
+  );
+}
+
+function giveCardId(baseId) {
+  const id = Object.keys(CARDS).find((cid) => CARDS[cid].baseId === baseId);
+  if (!id) throw new Error(`no card with baseId ${baseId}`);
+  return id;
+}
+
 function run() {
+  testFortifyOltreCinque();
+  testIsolamentoInRispostaAllAttacco();
+  testCounterFuoriDallaFinestraCombat();
   testIsActionAllowed();
   testNoWindowWithoutPlayableCards();
   testAiTurnResumesAfterCombatWindow();
